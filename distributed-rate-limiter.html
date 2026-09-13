@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a fast, reliable distributed rate limiter.">
+  <title>Designing a Distributed Rate Limiter</title>
+  <style>
+    :root {
+      --bg: #f5f2ea;
+      --surface: #fffdf8;
+      --surface-2: #eee9dd;
+      --ink: #17211d;
+      --muted: #65716a;
+      --line: #d9d4c8;
+      --accent: #e85d3f;
+      --accent-dark: #a9321d;
+      --green: #176b55;
+      --blue: #285f8f;
+      --shadow: 0 18px 50px rgba(28, 36, 31, 0.09);
+      --radius: 18px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Iowan Old Style, Charter, "Bitstream Charter", Georgia, serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 90% 2%, rgba(40, 95, 143, 0.14), transparent 25rem),
+        var(--bg);
+      font: 16px/1.7 var(--sans);
+    }
+    a { color: var(--accent-dark); }
+    code {
+      padding: 0.14rem 0.35rem;
+      border-radius: 5px;
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 0.9em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0 0;
+      padding: 1.2rem;
+      border: 1px solid #263931;
+      border-radius: 12px;
+      color: #e8f1ed;
+      background: #13231d;
+      font: 0.86rem/1.65 var(--mono);
+    }
+
+    .page { width: min(1160px, calc(100% - 32px)); margin: 0 auto; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 22px 0;
+      font-size: 0.86rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .topbar a { color: var(--ink); font-weight: 750; text-decoration: none; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+    .status::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      content: "";
+      box-shadow: 0 0 0 4px rgba(23, 107, 85, 0.12);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+      gap: 48px;
+      align-items: end;
+      padding: 70px 0 78px;
+      border-top: 1px solid var(--line);
+    }
+    .eyebrow {
+      margin: 0 0 16px;
+      color: var(--blue);
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { text-wrap: balance; }
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font: 700 clamp(3.2rem, 7vw, 6.8rem)/0.93 var(--serif);
+      letter-spacing: -0.055em;
+    }
+    .lede {
+      margin: 0;
+      color: var(--muted);
+      font: 1.13rem/1.75 var(--serif);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .pill {
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 253, 248, 0.55);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 760px);
+      gap: 70px;
+      justify-content: center;
+      padding-bottom: 110px;
+    }
+    aside { position: relative; }
+    nav {
+      position: sticky;
+      top: 24px;
+      padding: 18px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    nav strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    nav a {
+      display: block;
+      padding: 4px 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-decoration: none;
+    }
+    nav a:hover { color: var(--blue); }
+
+    article > section { margin: 0 0 76px; scroll-margin-top: 28px; }
+    h2 {
+      margin: 0 0 22px;
+      font: 700 clamp(2rem, 4vw, 3.1rem)/1.05 var(--serif);
+      letter-spacing: -0.035em;
+    }
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 1.04rem;
+      letter-spacing: -0.01em;
+    }
+    p { margin: 0 0 18px; }
+    ul, ol { padding-left: 1.25rem; }
+    li { margin: 0.42rem 0; }
+    .section-number {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--blue);
+      font: 700 0.75rem/1 var(--mono);
+      letter-spacing: 0.12em;
+    }
+    .callout {
+      margin: 26px 0;
+      padding: 20px 22px;
+      border-left: 4px solid var(--blue);
+      border-radius: 0 12px 12px 0;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .callout strong { color: var(--blue); }
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 14px;
+      margin: 22px 0;
+    }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 253, 248, 0.7);
+    }
+    .card h3 { margin-top: 0; }
+    .card p, .card li { color: var(--muted); font-size: 0.9rem; }
+    .card p:last-child { margin-bottom: 0; }
+    .metric {
+      color: var(--blue);
+      font: 700 1.85rem/1 var(--serif);
+    }
+
+    .diagram {
+      overflow-x: auto;
+      margin: 28px 0;
+      padding: 28px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(rgba(217, 212, 200, 0.25) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(217, 212, 200, 0.25) 1px, transparent 1px),
+        var(--surface);
+      background-size: 24px 24px;
+      box-shadow: var(--shadow);
+    }
+    .flow {
+      display: flex;
+      min-width: 680px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .node {
+      min-width: 112px;
+      padding: 13px 10px;
+      border: 1.5px solid var(--ink);
+      border-radius: 10px;
+      background: var(--surface);
+      text-align: center;
+      font-size: 0.8rem;
+      font-weight: 750;
+      box-shadow: 4px 4px 0 var(--surface-2);
+    }
+    .node.blue { border-color: var(--blue); color: var(--blue); }
+    .node.green { border-color: var(--green); color: var(--green); }
+    .arrow { color: var(--muted); font: 700 1.2rem/1 var(--mono); }
+    .diagram-caption {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+    .decision {
+      width: 100%;
+      margin: 18px 0;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+    .decision th, .decision td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .decision th {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .good { color: var(--green); font-weight: 700; }
+    .warn { color: var(--accent-dark); font-weight: 700; }
+    .formula {
+      margin: 25px 0;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      text-align: center;
+      font: 700 1rem/1.7 var(--mono);
+      box-shadow: var(--shadow);
+    }
+    .steps {
+      margin: 24px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: step;
+    }
+    .steps li {
+      position: relative;
+      min-height: 52px;
+      margin: 0;
+      padding: 0 0 24px 52px;
+      counter-increment: step;
+    }
+    .steps li::before {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border-radius: 50%;
+      color: white;
+      background: var(--blue);
+      content: counter(step);
+      font: 700 0.78rem/1 var(--mono);
+    }
+    .steps li:not(:last-child)::after {
+      position: absolute;
+      top: 34px;
+      bottom: 2px;
+      left: 15px;
+      width: 1px;
+      background: var(--line);
+      content: "";
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 35px 0 55px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 820px) {
+      .hero { grid-template-columns: 1fr; gap: 28px; padding: 48px 0 60px; }
+      .layout { display: block; }
+      aside { display: none; }
+      .grid-3 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 24px, 1160px); }
+      h1 { font-size: 3.05rem; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .footer { display: block; }
+    }
+    @media print {
+      body { background: white; }
+      .topbar, aside { display: none; }
+      .hero, .layout { display: block; }
+      article > section { break-inside: avoid; }
+      .card, .diagram, .callout, .formula { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a Distributed Rate Limiter</h1>
+          <div class="meta">
+            <span class="pill">Token bucket</span>
+            <span class="pill">Redis</span>
+            <span class="pill">Low latency</span>
+            <span class="pill">12 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we enforce quotas across thousands of application servers
+          without adding a fragile network hop to every request? The answer
+          combines atomic shared state, local token leases, and explicit
+          failure policies.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#requirements">Requirements</a>
+            <a href="#algorithm">Algorithm</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#request-flow">Request flow</a>
+            <a href="#data-model">Data model</a>
+            <a href="#scaling">Scaling</a>
+            <a href="#failures">Failure policy</a>
+            <a href="#multi-region">Multi-region</a>
+            <a href="#operations">Operations</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="requirements">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Protect systems and enforce plans</h2>
+            <p>
+              A rate limiter decides whether a request may proceed under one or
+              more rules. It protects dependencies from overload, prevents
+              abuse, and enforces customer quotas. It should be substantially
+              faster and more available than the service it protects.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Limit by user, API key, IP, tenant, or route</li>
+                  <li>Support steady rates with short bursts</li>
+                  <li>Return remaining quota and retry timing</li>
+                  <li>Update policies without application deploys</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>Decision latency below 5 ms at p99</li>
+                  <li>Millions of decisions per second</li>
+                  <li>No single point of failure</li>
+                  <li>Bounded quota overshoot during failures</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Semantics first:</strong> a rate limiter cannot maximize
+              availability, global accuracy, and low latency during a network
+              partition. Define whether each endpoint fails open or fails closed.
+            </div>
+          </section>
+
+          <section id="algorithm">
+            <span class="section-number">02 / ALGORITHM</span>
+            <h2>Use a token bucket</h2>
+            <p>
+              Each key owns a bucket with capacity <code>C</code>. Tokens refill
+              continuously at rate <code>R</code> per second. A request costing
+              <code>N</code> tokens is allowed only when at least
+              <code>N</code> tokens remain.
+            </p>
+            <div class="formula">
+              available = min(C, previous + elapsed_seconds × R)<br>
+              allow = available ≥ cost
+            </div>
+            <p>
+              Capacity controls burst size; refill rate controls sustained
+              traffic. A bucket with capacity 100 and refill rate 10/s allows an
+              idle client to burst 100 requests, then sustain 10 requests/s.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr>
+                  <th>Algorithm</th>
+                  <th>Strength</th>
+                  <th>Weakness</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Fixed window</strong></td>
+                  <td>Cheap counter and expiry</td>
+                  <td>Boundary bursts can reach 2× the limit</td>
+                </tr>
+                <tr>
+                  <td><strong>Sliding log</strong></td>
+                  <td>Precise rolling window</td>
+                  <td>Stores one timestamp per request</td>
+                </tr>
+                <tr>
+                  <td><strong>Sliding counter</strong></td>
+                  <td>Good accuracy and bounded state</td>
+                  <td>Approximation near boundaries</td>
+                </tr>
+                <tr>
+                  <td><strong>Token bucket</strong></td>
+                  <td>O(1) state and natural bursts</td>
+                  <td>Requires atomic refill arithmetic</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">03 / HIGH LEVEL</span>
+            <h2>Put enforcement close to traffic</h2>
+            <div class="diagram" role="img" aria-label="Distributed rate limiter architecture">
+              <div class="flow">
+                <div class="node">Client</div>
+                <span class="arrow">→</span>
+                <div class="node blue">API gateway</div>
+                <span class="arrow">→</span>
+                <div class="node green">Limiter agent</div>
+                <span class="arrow">↔</span>
+                <div class="node">Redis cluster</div>
+                <span class="arrow">←</span>
+                <div class="node blue">Policy service</div>
+              </div>
+              <p class="diagram-caption">
+                The control plane distributes rules; the data plane makes request decisions.
+              </p>
+            </div>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Data plane</h3>
+                <p>
+                  Gateway-side agents load cached policies and evaluate requests.
+                  Shared counters live in a partitioned in-memory store.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Control plane</h3>
+                <p>
+                  A policy service validates, versions, and distributes rules.
+                  Its outage must not stop decisions using the last known policy.
+                </p>
+              </div>
+            </div>
+            <p>
+              A sidecar or library avoids an extra service hop, but complicates
+              upgrades. A dedicated service centralizes logic, but adds latency
+              and another availability dependency. A gateway plugin is often the
+              best fit when most traffic already crosses a gateway.
+            </p>
+          </section>
+
+          <section id="request-flow">
+            <span class="section-number">04 / DECISION PATH</span>
+            <h2>Make one atomic decision</h2>
+            <ol class="steps">
+              <li>
+                <strong>Build a descriptor.</strong> Extract trusted identity,
+                route, method, and cost into a canonical rule key.
+              </li>
+              <li>
+                <strong>Resolve policy locally.</strong> Match the descriptor
+                against a versioned in-memory policy cache.
+              </li>
+              <li>
+                <strong>Consume tokens atomically.</strong> Route the key to its
+                owner shard and run refill-and-consume as one operation.
+              </li>
+              <li>
+                <strong>Return the decision.</strong> Allow the request or return
+                HTTP 429 with standard rate-limit and retry headers.
+              </li>
+            </ol>
+            <pre>HTTP/1.1 429 Too Many Requests
+RateLimit-Limit: 100
+RateLimit-Remaining: 0
+RateLimit-Reset: 7
+Retry-After: 7</pre>
+            <p>
+              Never trust a client-supplied user ID or IP header directly.
+              Identity must come from authenticated claims or a trusted proxy;
+              otherwise callers can rotate keys and bypass the limit.
+            </p>
+          </section>
+
+          <section id="data-model">
+            <span class="section-number">05 / STATE</span>
+            <h2>Keep state compact and atomic</h2>
+            <pre>policy:
+  id: "tenant-write-v3"
+  match: { route: "/v1/orders", method: "POST" }
+  key_by: ["tenant_id"]
+  capacity: 100
+  refill_per_second: 10
+  request_cost: 1
+  failure_mode: "closed"
+
+bucket key:
+  rl:{tenant-write-v3}:{tenant_842}
+
+bucket value:
+  tokens: 67.4
+  last_refill_ms: 1789252937000</pre>
+            <p>
+              In Redis, use a Lua script or server-side function so reading the
+              timestamp, calculating refill, consuming tokens, updating state,
+              and setting expiry happen atomically. Use the datastore's clock to
+              avoid inconsistent application-server clocks.
+            </p>
+            <div class="callout">
+              <strong>Expire idle buckets:</strong> a bucket can be deleted after
+              enough time has passed to refill it completely. On the next request,
+              absence means a full bucket. This bounds memory by active keys.
+            </div>
+            <h3>Hierarchical limits</h3>
+            <p>
+              A request may consume from user, tenant, route, and global buckets.
+              Checking them independently can partially consume quota before a
+              later rule rejects the request. Co-locate related keys with hash
+              tags and update all buckets atomically, or reserve and compensate
+              with carefully designed idempotency.
+            </p>
+          </section>
+
+          <section id="scaling">
+            <span class="section-number">06 / THROUGHPUT</span>
+            <h2>Lease tokens to reduce network traffic</h2>
+            <p>
+              One shared-store operation per application request eventually
+              becomes expensive. Instead, each gateway leases a small batch of
+              tokens from the global bucket and spends them locally.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">10–100×</div>
+                <h3>fewer remote calls</h3>
+                <p>One lease supports a batch of local decisions.</p>
+              </div>
+              <div class="card">
+                <div class="metric">&lt;1 ms</div>
+                <h3>common-path latency</h3>
+                <p>Most decisions use process-local memory.</p>
+              </div>
+              <div class="card">
+                <div class="metric">bounded</div>
+                <h3>quota overshoot</h3>
+                <p>At most outstanding leases across live gateways.</p>
+              </div>
+            </div>
+            <p>
+              Choose lease size dynamically. High-volume stable keys receive
+              larger leases; low-volume or security-sensitive keys use smaller
+              leases or direct checks. Short lease TTLs bound stranded capacity
+              when an agent crashes.
+            </p>
+            <h3>Partitioning</h3>
+            <p>
+              Consistent-hash bucket keys across state-store shards and replicate
+              each shard across availability zones. One celebrity tenant can
+              still create a hot key because a single bucket has one owner.
+              Mitigate it with token leasing, per-gateway sub-buckets, or a
+              two-level local-plus-global policy.
+            </p>
+          </section>
+
+          <section id="failures">
+            <span class="section-number">07 / FAILURE POLICY</span>
+            <h2>Failure behavior is a product decision</h2>
+            <table class="decision">
+              <thead>
+                <tr>
+                  <th>Endpoint type</th>
+                  <th>Suggested behavior</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Public read API</td>
+                  <td class="good">Fail open with local emergency limit</td>
+                  <td>Preserve availability while containing overload</td>
+                </tr>
+                <tr>
+                  <td>Login or password reset</td>
+                  <td class="warn">Fail closed</td>
+                  <td>Abuse prevention is more important than availability</td>
+                </tr>
+                <tr>
+                  <td>Paid usage quota</td>
+                  <td class="warn">Fail closed or use a bounded lease</td>
+                  <td>Avoid unbilled usage and contractual violations</td>
+                </tr>
+                <tr>
+                  <td>Internal health check</td>
+                  <td class="good">Bypass</td>
+                  <td>Do not make recovery depend on the limiter</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Add strict timeouts and a circuit breaker around the shared store.
+              If it slows down, do not allow limiter calls to exhaust gateway
+              threads. The agent should switch immediately to the configured
+              degraded mode and emit a high-severity signal.
+            </p>
+            <h3>Policy service outage</h3>
+            <p>
+              Persist the last known valid policy snapshot locally. Policies
+              carry versions and activation times, and invalid updates are
+              rejected atomically. The decision path never synchronously calls
+              the policy service.
+            </p>
+          </section>
+
+          <section id="multi-region">
+            <span class="section-number">08 / GLOBAL LIMITS</span>
+            <h2>Avoid a cross-ocean decision hop</h2>
+            <p>
+              A strongly consistent global counter adds inter-region latency and
+              loses availability during partitions. Most products should divide
+              quota among regions and enforce each allocation locally.
+            </p>
+            <div class="callout">
+              <strong>Example:</strong> for a global limit of 10,000 requests/s,
+              allocate 5,000 to the US, 3,000 to Europe, and 2,000 to Asia.
+              Rebalance allocations periodically as demand moves.
+            </div>
+            <p>
+              Keep a reserve pool so a busy region can acquire more capacity.
+              During a partition, each region can overshoot only by its local
+              allocation or outstanding lease. If strict global enforcement is
+              mandatory, route all requests for a key to a home region and
+              accept the latency and availability cost.
+            </p>
+          </section>
+
+          <section id="operations">
+            <span class="section-number">09 / PRODUCTION</span>
+            <h2>Measure protection and user impact</h2>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Service health</h3>
+                <ul>
+                  <li>Decision latency by outcome and shard</li>
+                  <li>State-store errors and timeouts</li>
+                  <li>Policy age and distribution lag</li>
+                  <li>Lease utilization and stranded tokens</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Business health</h3>
+                <ul>
+                  <li>Allow and reject rate by policy</li>
+                  <li>Top rejected tenants and routes</li>
+                  <li>Time spent in degraded mode</li>
+                  <li>Estimated overshoot and false rejects</li>
+                </ul>
+              </div>
+            </div>
+            <p>
+              Log sampled decisions with policy version, key hash, outcome, and
+              remaining quota—but never raw API keys or sensitive identity.
+              Provide a dry-run mode so new policies report what they would block
+              before they begin enforcing.
+            </p>
+            <h3>Final design summary</h3>
+            <p>
+              Use token buckets for constant-size state and controlled bursts.
+              Evaluate cached policies at the gateway, perform atomic updates in
+              a sharded in-memory store, and lease tokens locally at scale.
+              Separate policy management from request decisions, allocate global
+              quota regionally, and define explicit fail-open or fail-closed
+              behavior for every rule.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
