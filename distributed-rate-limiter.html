@@ -480,40 +480,89 @@
               <div class="flow">
                 <div class="node">Client</div>
                 <span class="arrow">→</span>
-                <div class="node blue">API gateway</div>
+                <div class="node blue">Envoy Gateway</div>
                 <span class="arrow">→</span>
-                <div class="node green">Limiter agent</div>
+                <div class="node green">Go gRPC limiter</div>
                 <span class="arrow">↔</span>
-                <div class="node">Redis cluster</div>
+                <div class="node">Redis Cluster</div>
                 <span class="arrow">←</span>
-                <div class="node blue">Policy service</div>
+                <div class="node blue">Policy API</div>
               </div>
               <p class="diagram-caption">
-                The control plane distributes rules; the data plane makes request decisions.
+                PostgreSQL stores policy definitions outside the request decision path.
               </p>
             </div>
             <div class="grid-2">
               <div class="card">
                 <h3>Data plane</h3>
                 <p>
-                  Gateway-side agents load cached policies and evaluate requests.
-                  Shared counters live in a partitioned in-memory store.
+                  Envoy calls a nearby Go rate-limit service over gRPC. The
+                  service caches policies and stores shared counters in Redis.
                 </p>
               </div>
               <div class="card">
                 <h3>Control plane</h3>
                 <p>
-                  A policy service validates, versions, and distributes rules.
-                  Its outage must not stop decisions using the last known policy.
+                  A Go policy API stores versioned rules in PostgreSQL and pushes
+                  updates to limiter instances. Its outage does not stop decisions.
                 </p>
               </div>
             </div>
             <p>
               A sidecar or library avoids an extra service hop, but complicates
               upgrades. A dedicated service centralizes logic, but adds latency
-              and another availability dependency. A gateway plugin is often the
-              best fit when most traffic already crosses a gateway.
+              and another availability dependency. Envoy's standard gRPC
+              rate-limit filter gives us centralized behavior while keeping the
+              service independently scalable and close to each gateway.
             </p>
+            <h3>Recommended technology stack</h3>
+            <table class="decision">
+              <thead>
+                <tr>
+                  <th>Responsibility</th>
+                  <th>Tool</th>
+                  <th>Why it fits</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Traffic enforcement</td>
+                  <td><strong>Envoy Gateway</strong></td>
+                  <td>Extracts trusted descriptors, calls a gRPC limiter, and returns HTTP 429 before upstream work begins</td>
+                </tr>
+                <tr>
+                  <td>Decision service</td>
+                  <td><strong>Go + gRPC</strong></td>
+                  <td>Low allocation overhead, predictable latency, and compatibility with Envoy's rate-limit service API</td>
+                </tr>
+                <tr>
+                  <td>Bucket state</td>
+                  <td><strong>Redis Cluster 7</strong></td>
+                  <td>Sub-millisecond in-memory access, sharding, expiry, and atomic Redis Functions</td>
+                </tr>
+                <tr>
+                  <td>Policy storage</td>
+                  <td><strong>PostgreSQL</strong></td>
+                  <td>Transactional policy versions, audit history, and safe configuration updates</td>
+                </tr>
+                <tr>
+                  <td>Deployment</td>
+                  <td><strong>Kubernetes</strong></td>
+                  <td>Runs one limiter deployment per region and autoscales it independently from gateways</td>
+                </tr>
+                <tr>
+                  <td>Telemetry</td>
+                  <td><strong>Prometheus + Grafana</strong></td>
+                  <td>Low-cardinality metrics, SLO dashboards, and alerts for latency or degraded mode</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="callout">
+              <strong>Managed deployment:</strong> on AWS, use EKS for Envoy and
+              the Go services, ElastiCache for Redis in cluster mode, and RDS for
+              PostgreSQL. Equivalent managed products work on other clouds; the
+              Redis and gRPC interfaces keep the design portable.
+            </div>
           </section>
 
           <section id="request-flow">
@@ -521,20 +570,20 @@
             <h2>Make one atomic decision</h2>
             <ol class="steps">
               <li>
-                <strong>Build a descriptor.</strong> Extract trusted identity,
-                route, method, and cost into a canonical rule key.
+                <strong>Build an Envoy descriptor.</strong> Extract trusted
+                identity, route, method, and cost into a canonical rule key.
               </li>
               <li>
-                <strong>Resolve policy locally.</strong> Match the descriptor
-                against a versioned in-memory policy cache.
+                <strong>Call the Go service.</strong> Envoy uses a short-lived
+                HTTP/2 gRPC request to a limiter instance in the same zone.
               </li>
               <li>
-                <strong>Consume tokens atomically.</strong> Route the key to its
-                owner shard and run refill-and-consume as one operation.
+                <strong>Consume tokens atomically.</strong> The service resolves
+                its cached policy and invokes a Redis Function on the owner shard.
               </li>
               <li>
-                <strong>Return the decision.</strong> Allow the request or return
-                HTTP 429 with standard rate-limit and retry headers.
+                <strong>Return the decision.</strong> Envoy allows the request or
+                returns HTTP 429 with standard rate-limit and retry headers.
               </li>
             </ol>
             <pre>HTTP/1.1 429 Too Many Requests
@@ -568,11 +617,26 @@ bucket value:
   tokens: 67.4
   last_refill_ms: 1789252937000</pre>
             <p>
-              In Redis, use a Lua script or server-side function so reading the
-              timestamp, calculating refill, consuming tokens, updating state,
-              and setting expiry happen atomically. Use the datastore's clock to
-              avoid inconsistent application-server clocks.
+              In Redis 7, deploy a versioned Redis Function that reads the
+              server clock, calculates refill, consumes tokens, updates state,
+              and sets expiry atomically. Prefer Functions over sending ad hoc
+              Lua on every request: they are named, loaded once, and easier to
+              version operationally.
             </p>
+            <pre>-- Redis Function, simplified token-bucket operation
+local now = redis.call("TIME")
+local state = redis.call("HMGET", key, "tokens", "refilled_at")
+local available = math.min(capacity, tokens + elapsed * refill_rate)
+
+if available &lt; cost then
+  return { 0, available, retry_after_ms }
+end
+
+redis.call("HSET", key,
+  "tokens", available - cost,
+  "refilled_at", now_ms)
+redis.call("PEXPIRE", key, ttl_ms)
+return { 1, available - cost, 0 }</pre>
             <div class="callout">
               <strong>Expire idle buckets:</strong> a bucket can be deleted after
               enough time has passed to refill it completely. On the next request,
@@ -593,8 +657,9 @@ bucket value:
             <h2>Lease tokens to reduce network traffic</h2>
             <p>
               One shared-store operation per application request eventually
-              becomes expensive. Instead, each gateway leases a small batch of
-              tokens from the global bucket and spends them locally.
+              becomes expensive. Instead, each Go limiter instance leases a
+              small batch of tokens from the global Redis bucket and spends them
+              from an in-process cache.
             </p>
             <div class="grid-3">
               <div class="card">
@@ -610,7 +675,7 @@ bucket value:
               <div class="card">
                 <div class="metric">bounded</div>
                 <h3>quota overshoot</h3>
-                <p>At most outstanding leases across live gateways.</p>
+                <p>At most outstanding leases across live limiter instances.</p>
               </div>
             </div>
             <p>
@@ -621,11 +686,11 @@ bucket value:
             </p>
             <h3>Partitioning</h3>
             <p>
-              Consistent-hash bucket keys across state-store shards and replicate
-              each shard across availability zones. One celebrity tenant can
-              still create a hot key because a single bucket has one owner.
-              Mitigate it with token leasing, per-gateway sub-buckets, or a
-              two-level local-plus-global policy.
+              Redis Cluster hashes bucket keys across primary shards; place each
+              primary and replica in different availability zones. One celebrity
+              tenant can still create a hot key because a single bucket has one
+              owner. Mitigate it with token leasing, per-instance sub-buckets, or
+              a two-level local-plus-global policy.
             </p>
           </section>
 
@@ -664,17 +729,20 @@ bucket value:
               </tbody>
             </table>
             <p>
-              Add strict timeouts and a circuit breaker around the shared store.
-              If it slows down, do not allow limiter calls to exhaust gateway
-              threads. The agent should switch immediately to the configured
-              degraded mode and emit a high-severity signal.
+              Configure Envoy with a 5 ms gRPC timeout and circuit breaking for
+              the limiter cluster. The Go service uses a shorter Redis timeout so
+              it can still return a policy-specific degraded decision. For total
+              gRPC service failure, configure security-sensitive Envoy routes
+              with <code>failure_mode_deny</code>; fail-open routes pair the
+              external limiter with Envoy's local rate-limit filter as an
+              emergency ceiling.
             </p>
             <h3>Policy service outage</h3>
             <p>
-              Persist the last known valid policy snapshot locally. Policies
-              carry versions and activation times, and invalid updates are
-              rejected atomically. The decision path never synchronously calls
-              the policy service.
+              Each Go limiter persists the last valid PostgreSQL policy snapshot
+              on local disk and keeps it in memory. Policies carry versions and
+              activation times, and invalid updates are rejected atomically. The
+              decision path never synchronously calls PostgreSQL or the policy API.
             </p>
           </section>
 
@@ -707,8 +775,8 @@ bucket value:
               <div class="card">
                 <h3>Service health</h3>
                 <ul>
-                  <li>Decision latency by outcome and shard</li>
-                  <li>State-store errors and timeouts</li>
+                  <li>Prometheus decision latency by outcome and shard</li>
+                  <li>Redis errors, saturation, and timeouts</li>
                   <li>Policy age and distribution lag</li>
                   <li>Lease utilization and stranded tokens</li>
                 </ul>
@@ -726,17 +794,19 @@ bucket value:
             <p>
               Log sampled decisions with policy version, key hash, outcome, and
               remaining quota—but never raw API keys or sensitive identity.
-              Provide a dry-run mode so new policies report what they would block
-              before they begin enforcing.
+              Export traces with OpenTelemetry and send structured logs to the
+              existing log platform. Provide a dry-run mode so new policies
+              report what they would block before they begin enforcing.
             </p>
             <h3>Final design summary</h3>
             <p>
-              Use token buckets for constant-size state and controlled bursts.
-              Evaluate cached policies at the gateway, perform atomic updates in
-              a sharded in-memory store, and lease tokens locally at scale.
-              Separate policy management from request decisions, allocate global
-              quota regionally, and define explicit fail-open or fail-closed
-              behavior for every rule.
+              Envoy enforces decisions at the gateway and calls a Go gRPC limiter.
+              Redis Cluster stores token buckets with atomic Redis Functions,
+              while PostgreSQL stores versioned policies outside the request
+              path. Local token leases reduce Redis traffic at scale. Kubernetes
+              runs the stack per region, and Prometheus plus Grafana expose
+              latency, rejections, and degraded behavior. Every rule still needs
+              an explicit fail-open or fail-closed policy.
             </p>
           </section>
         </article>
