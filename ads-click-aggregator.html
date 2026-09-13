@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a scalable, reliable ads click aggregation service.">
+  <title>Designing an Ads Click Aggregator</title>
+  <style>
+    :root {
+      --bg: #f5f2ea;
+      --surface: #fffdf8;
+      --surface-2: #eee9dd;
+      --ink: #17211d;
+      --muted: #65716a;
+      --line: #d9d4c8;
+      --accent: #e85d3f;
+      --accent-dark: #a9321d;
+      --green: #176b55;
+      --blue: #285f8f;
+      --shadow: 0 18px 50px rgba(28, 36, 31, 0.09);
+      --radius: 18px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Iowan Old Style, Charter, "Bitstream Charter", Georgia, serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 90% 2%, rgba(232, 93, 63, 0.14), transparent 25rem),
+        var(--bg);
+      font: 16px/1.7 var(--sans);
+    }
+    a { color: var(--accent-dark); }
+    code {
+      padding: 0.14rem 0.35rem;
+      border-radius: 5px;
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 0.9em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0 0;
+      padding: 1.2rem;
+      border: 1px solid #263931;
+      border-radius: 12px;
+      color: #e8f1ed;
+      background: #13231d;
+      font: 0.86rem/1.65 var(--mono);
+    }
+
+    .page { width: min(1160px, calc(100% - 32px)); margin: 0 auto; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 22px 0;
+      font-size: 0.86rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .topbar a { color: var(--ink); font-weight: 750; text-decoration: none; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+    .status::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      content: "";
+      box-shadow: 0 0 0 4px rgba(23, 107, 85, 0.12);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+      gap: 48px;
+      align-items: end;
+      padding: 70px 0 78px;
+      border-top: 1px solid var(--line);
+    }
+    .eyebrow {
+      margin: 0 0 16px;
+      color: var(--accent-dark);
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { text-wrap: balance; }
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font: 700 clamp(3.2rem, 7vw, 6.8rem)/0.93 var(--serif);
+      letter-spacing: -0.055em;
+    }
+    .lede {
+      margin: 0;
+      color: var(--muted);
+      font: 1.13rem/1.75 var(--serif);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .pill {
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 253, 248, 0.55);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 760px);
+      gap: 70px;
+      justify-content: center;
+      padding-bottom: 110px;
+    }
+    aside { position: relative; }
+    nav {
+      position: sticky;
+      top: 24px;
+      padding: 18px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    nav strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    nav a {
+      display: block;
+      padding: 4px 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-decoration: none;
+    }
+    nav a:hover { color: var(--accent-dark); }
+
+    article > section { margin: 0 0 76px; scroll-margin-top: 28px; }
+    h2 {
+      margin: 0 0 22px;
+      font: 700 clamp(2rem, 4vw, 3.1rem)/1.05 var(--serif);
+      letter-spacing: -0.035em;
+    }
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 1.04rem;
+      letter-spacing: -0.01em;
+    }
+    p { margin: 0 0 18px; }
+    .section-number {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent);
+      font: 700 0.75rem/1 var(--mono);
+      letter-spacing: 0.12em;
+    }
+    .callout {
+      margin: 26px 0;
+      padding: 20px 22px;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 12px 12px 0;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .callout strong { color: var(--accent-dark); }
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 14px;
+      margin: 22px 0;
+    }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 253, 248, 0.7);
+    }
+    .card h3 { margin-top: 0; }
+    .card p, .card li { color: var(--muted); font-size: 0.9rem; }
+    .card p:last-child { margin-bottom: 0; }
+    .metric {
+      color: var(--accent-dark);
+      font: 700 1.85rem/1 var(--serif);
+    }
+    ul, ol { padding-left: 1.25rem; }
+    li { margin: 0.42rem 0; }
+
+    .diagram {
+      overflow-x: auto;
+      margin: 28px 0;
+      padding: 28px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(rgba(217, 212, 200, 0.25) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(217, 212, 200, 0.25) 1px, transparent 1px),
+        var(--surface);
+      background-size: 24px 24px;
+      box-shadow: var(--shadow);
+    }
+    .flow {
+      display: flex;
+      min-width: 680px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .node {
+      min-width: 112px;
+      padding: 13px 10px;
+      border: 1.5px solid var(--ink);
+      border-radius: 10px;
+      background: var(--surface);
+      text-align: center;
+      font-size: 0.8rem;
+      font-weight: 750;
+      box-shadow: 4px 4px 0 var(--surface-2);
+    }
+    .node.accent { border-color: var(--accent); color: var(--accent-dark); }
+    .node.green { border-color: var(--green); color: var(--green); }
+    .arrow { color: var(--muted); font: 700 1.2rem/1 var(--mono); }
+    .diagram-caption {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+
+    .steps {
+      margin: 24px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: step;
+    }
+    .steps li {
+      position: relative;
+      min-height: 52px;
+      margin: 0;
+      padding: 0 0 24px 52px;
+      counter-increment: step;
+    }
+    .steps li::before {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border-radius: 50%;
+      color: white;
+      background: var(--green);
+      content: counter(step);
+      font: 700 0.78rem/1 var(--mono);
+    }
+    .steps li:not(:last-child)::after {
+      position: absolute;
+      top: 34px;
+      bottom: 2px;
+      left: 15px;
+      width: 1px;
+      background: var(--line);
+      content: "";
+    }
+
+    .decision {
+      width: 100%;
+      margin: 18px 0;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+    .decision th, .decision td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .decision th {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .good { color: var(--green); font-weight: 700; }
+    .warn { color: var(--accent-dark); font-weight: 700; }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 35px 0 55px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 820px) {
+      .hero { grid-template-columns: 1fr; gap: 28px; padding: 48px 0 60px; }
+      .layout { display: block; }
+      aside { display: none; }
+      .grid-3 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 24px, 1160px); }
+      h1 { font-size: 3.05rem; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .footer { display: block; }
+    }
+    @media print {
+      body { background: white; }
+      .topbar, aside { display: none; }
+      .hero, .layout { display: block; }
+      article > section { break-inside: avoid; }
+      .card, .diagram, .callout { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="/">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing an Ads Click Aggregator</h1>
+          <div class="meta">
+            <span class="pill">Event streaming</span>
+            <span class="pill">At-least-once</span>
+            <span class="pill">Real-time OLAP</span>
+            <span class="pill">10 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we ingest millions of ad clicks, reject duplicates, publish
+          fresh campaign metrics, and still produce correct billable totals?
+          This design separates the fast serving path from the source of truth.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#requirements">Requirements</a>
+            <a href="#estimation">Estimation</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#write-path">Write path</a>
+            <a href="#aggregation">Aggregation</a>
+            <a href="#storage">Storage</a>
+            <a href="#correctness">Correctness</a>
+            <a href="#scaling">Scaling</a>
+            <a href="#operations">Operations</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="requirements">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Start with the contract</h2>
+            <p>
+              The service accepts click events from ad-serving clients and
+              exposes aggregated counts to advertisers. A click may arrive late,
+              be retried, or be malicious. The reporting UI should be fast and
+              fresh; billing should favor correctness over immediacy.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Ingest a uniquely identified click</li>
+                  <li>Aggregate by campaign, ad, geography, and time</li>
+                  <li>Query near-real-time metrics and historical reports</li>
+                  <li>Filter duplicates, bots, and invalid campaigns</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>99.99% ingestion availability</li>
+                  <li>Metrics visible within 60 seconds</li>
+                  <li>No accepted event silently lost</li>
+                  <li>Auditable and replayable billing totals</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Key design choice:</strong> “exactly once” is an end-to-end
+              business property, not a message-broker checkbox. Use at-least-once
+              delivery plus idempotent processing and periodic reconciliation.
+            </div>
+          </section>
+
+          <section id="estimation">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Estimate before choosing tools</h2>
+            <p>
+              Assume 10 billion clicks per day, 5× peak traffic, and a compact
+              500-byte event after envelope metadata.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">116k</div>
+                <h3>average events/s</h3>
+                <p>10B ÷ 86,400 seconds.</p>
+              </div>
+              <div class="card">
+                <div class="metric">580k</div>
+                <h3>peak events/s</h3>
+                <p>Plan for campaign bursts and retries.</p>
+              </div>
+              <div class="card">
+                <div class="metric">5 TB</div>
+                <h3>raw data/day</h3>
+                <p>Before compression and replication.</p>
+              </div>
+            </div>
+            <p>
+              This is a write-heavy, append-oriented workload. Query volume is
+              lower, but queries scan many dimensions. It points toward a durable
+              log for transport, object storage for truth, and an OLAP store for
+              interactive reporting.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">03 / HIGH LEVEL</span>
+            <h2>Separate ingest, compute, and serve</h2>
+            <div class="diagram" role="img" aria-label="Click aggregation architecture">
+              <div class="flow">
+                <div class="node">Ad client</div>
+                <span class="arrow">→</span>
+                <div class="node accent">Ingest API</div>
+                <span class="arrow">→</span>
+                <div class="node">Event log</div>
+                <span class="arrow">→</span>
+                <div class="node green">Stream jobs</div>
+                <span class="arrow">→</span>
+                <div class="node">OLAP store</div>
+                <span class="arrow">→</span>
+                <div class="node accent">Query API</div>
+              </div>
+              <p class="diagram-caption">
+                Raw events also flow from the event log into immutable object storage.
+              </p>
+            </div>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Fast path</h3>
+                <p>
+                  Stream processors validate, deduplicate, and update minute
+                  buckets. The OLAP database serves dashboards within seconds.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Truth path</h3>
+                <p>
+                  Every accepted raw event lands in object storage. Batch jobs
+                  replay and reconcile final totals for billing.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="write-path">
+            <span class="section-number">04 / INGESTION</span>
+            <h2>Keep the request path short</h2>
+            <pre>POST /v1/clicks
+{
+  "event_id": "0199a3c8-...",
+  "ad_id": "ad_842",
+  "campaign_id": "cmp_17",
+  "clicked_at": "2026-09-12T19:42:17Z",
+  "publisher_id": "pub_95",
+  "country": "US",
+  "device": "mobile"
+}
+
+202 Accepted
+{ "event_id": "0199a3c8-...", "status": "queued" }</pre>
+            <ol class="steps">
+              <li>
+                <strong>Authenticate and rate-limit.</strong> Validate the
+                publisher credential, request size, timestamp skew, and schema.
+              </li>
+              <li>
+                <strong>Enrich minimally.</strong> Add server receipt time,
+                coarse IP-derived geography, schema version, and trace ID.
+              </li>
+              <li>
+                <strong>Append durably.</strong> Acknowledge only after the
+                replicated event log confirms the write.
+              </li>
+              <li>
+                <strong>Process asynchronously.</strong> Fraud checks and
+                aggregation stay off the latency-sensitive request path.
+              </li>
+            </ol>
+            <p>
+              Partition the log by a stable hash of <code>campaign_id</code>.
+              This preserves per-campaign ordering while distributing traffic.
+              Large campaigns can use a composite key such as
+              <code>campaign_id + shard_id</code>.
+            </p>
+          </section>
+
+          <section id="aggregation">
+            <span class="section-number">05 / STREAM PROCESSING</span>
+            <h2>Aggregate in event-time windows</h2>
+            <p>
+              A stateful stream job consumes clicks, performs initial fraud
+              filtering, deduplicates by <code>event_id</code>, and maintains
+              one-minute tumbling windows. Event time—not arrival time—keeps a
+              delayed mobile click in the correct reporting period.
+            </p>
+            <div class="callout">
+              <strong>Late data policy:</strong> keep windows mutable for 10
+              minutes using watermarks. Events later than that are written to a
+              correction stream and folded in by reconciliation.
+            </div>
+            <h3>Rollups</h3>
+            <p>
+              Write low-cardinality, mergeable rows rather than incrementing one
+              database counter per click. Minute buckets can later roll up into
+              hour and day buckets.
+            </p>
+            <pre>aggregate key:
+  (minute, campaign_id, ad_id, country, device, shard)
+
+measures:
+  click_count, valid_click_count, estimated_cost
+
+merge:
+  SUM(measures) grouped by requested dimensions</pre>
+            <p>
+              The extra <code>shard</code> dimension spreads hot campaigns
+              across workers. Queries sum the shards, trading a small amount of
+              read work for much better write distribution.
+            </p>
+          </section>
+
+          <section id="storage">
+            <span class="section-number">06 / DATA LAYER</span>
+            <h2>Use each store for one job</h2>
+            <table class="decision">
+              <thead>
+                <tr>
+                  <th>Layer</th>
+                  <th>Purpose</th>
+                  <th>Retention</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Event log</strong></td>
+                  <td>Buffer bursts, preserve order, enable short replays</td>
+                  <td>3–7 days</td>
+                </tr>
+                <tr>
+                  <td><strong>Object storage</strong></td>
+                  <td>Immutable raw events partitioned by event date/hour</td>
+                  <td>Years</td>
+                </tr>
+                <tr>
+                  <td><strong>OLAP database</strong></td>
+                  <td>Low-latency filtering, grouping, and time-series queries</td>
+                  <td>13–24 months</td>
+                </tr>
+                <tr>
+                  <td><strong>Metadata database</strong></td>
+                  <td>Campaign state, budgets, advertiser configuration</td>
+                  <td>Indefinite</td>
+                </tr>
+              </tbody>
+            </table>
+            <h3>Query API</h3>
+            <pre>GET /v1/reports/clicks
+  ?campaign_id=cmp_17
+  &from=2026-09-01T00:00:00Z
+  &to=2026-09-02T00:00:00Z
+  &interval=hour
+  &group_by=country,device</pre>
+            <p>
+              Enforce maximum time ranges and dimensions, pre-aggregate common
+              views, cache completed historical periods, and return asynchronous
+              export jobs for expensive reports.
+            </p>
+          </section>
+
+          <section id="correctness">
+            <span class="section-number">07 / SEMANTICS</span>
+            <h2>Design for retries and disagreement</h2>
+            <h3>Deduplication</h3>
+            <p>
+              Clients generate globally unique event IDs. The stream processor
+              keeps a partitioned ID state with a TTL longer than the normal
+              retry window. Database writes use deterministic bucket keys or
+              idempotent upserts. A probabilistic filter can reduce lookups, but
+              it must not be the only billing deduplicator because false positives
+              would discard legitimate revenue events.
+            </p>
+            <h3>Replay</h3>
+            <p>
+              Stream jobs checkpoint offsets and state together. After a failure,
+              processing resumes from the last checkpoint. For code bugs, start a
+              new consumer from raw object storage, write to versioned aggregate
+              tables, validate totals, then atomically switch the query layer.
+            </p>
+            <h3>Reconciliation</h3>
+            <p>
+              A daily batch recomputes closed periods from immutable raw events,
+              compares results against stream aggregates, and emits adjustments.
+              Dashboards are provisional; reconciled rows are marked final and
+              become the source for invoices.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3 class="good">Optimize for availability</h3>
+                <p>Collection accepts traffic during downstream degradation because the log absorbs pressure.</p>
+              </div>
+              <div class="card">
+                <h3 class="warn">Never hide uncertainty</h3>
+                <p>Expose freshness and finalization state so consumers know whether totals may still change.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="scaling">
+            <span class="section-number">08 / BOTTLENECKS</span>
+            <h2>Scale by partition, then isolate skew</h2>
+            <ul>
+              <li><strong>Ingest API:</strong> stateless instances behind regional load balancers; autoscale on request rate and queue latency.</li>
+              <li><strong>Event log:</strong> add partitions for throughput, replicate across availability zones, and alert on consumer lag.</li>
+              <li><strong>Stream state:</strong> use embedded state backed by durable checkpoints; rescale during low-traffic periods.</li>
+              <li><strong>Hot campaigns:</strong> split one campaign across deterministic sub-shards and merge at query time.</li>
+              <li><strong>OLAP:</strong> partition by date, distribute by campaign hash, and sort by common filter dimensions.</li>
+              <li><strong>Regions:</strong> ingest locally and aggregate regionally; merge global reports asynchronously to avoid cross-region latency on every click.</li>
+            </ul>
+            <div class="callout">
+              Backpressure must propagate to the event log, not to users. If
+              processing falls behind, autoscale consumers and degrade dashboard
+              freshness while keeping click collection available.
+            </div>
+          </section>
+
+          <section id="operations">
+            <span class="section-number">09 / PRODUCTION</span>
+            <h2>Observe business truth, not just servers</h2>
+            <div class="grid-2">
+              <div class="card">
+                <h3>System signals</h3>
+                <ul>
+                  <li>Ingest success and p99 latency</li>
+                  <li>Partition throughput and consumer lag</li>
+                  <li>Checkpoint duration and failures</li>
+                  <li>Query latency and rejected queries</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Data-quality signals</h3>
+                <ul>
+                  <li>Duplicate and invalid-event rate</li>
+                  <li>Late-event distribution</li>
+                  <li>Raw-to-aggregate count delta</li>
+                  <li>Spend anomalies by campaign</li>
+                </ul>
+              </div>
+            </div>
+            <p>
+              Define a freshness SLO: 99% of valid clicks appear in advertiser
+              reports within 60 seconds. Track it using synthetic clicks that
+              traverse the complete pipeline, not merely component health checks.
+            </p>
+            <h3>Final design summary</h3>
+            <p>
+              A durable log decouples ingestion from computation. Stateful stream
+              processing creates fast, provisional aggregates. Immutable raw
+              storage enables replay, audit, and correct billing. An OLAP store
+              serves flexible reports, while idempotency and reconciliation make
+              at-least-once infrastructure behave exactly once at the business
+              level.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
