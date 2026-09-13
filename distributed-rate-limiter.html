@@ -424,21 +424,11 @@
 
           <section id="algorithm">
             <span class="section-number">02 / ALGORITHM</span>
-            <h2>Use a token bucket</h2>
+            <h2>Compare the algorithms</h2>
             <p>
-              Each key owns a bucket with capacity <code>C</code>. Tokens refill
-              continuously at rate <code>R</code> per second. A request costing
-              <code>N</code> tokens is allowed only when at least
-              <code>N</code> tokens remain.
-            </p>
-            <div class="formula">
-              available = min(C, previous + elapsed_seconds × R)<br>
-              allow = available ≥ cost
-            </div>
-            <p>
-              Capacity controls burst size; refill rate controls sustained
-              traffic. A bucket with capacity 100 and refill rate 10/s allows an
-              idle client to burst 100 requests, then sustain 10 requests/s.
+              Rate-limiting algorithms mainly differ in how they represent time
+              and whether they permit bursts. Assume every example below has a
+              limit of 100 requests per minute.
             </p>
             <table class="decision">
               <thead>
@@ -469,8 +459,99 @@
                   <td>O(1) state and natural bursts</td>
                   <td>Requires atomic refill arithmetic</td>
                 </tr>
+                <tr>
+                  <td><strong>Leaky bucket</strong></td>
+                  <td>Smooth, predictable output rate</td>
+                  <td>Queues requests and may add latency</td>
+                </tr>
               </tbody>
             </table>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Fixed window counter</h3>
+                <p>
+                  Divide time into separate windows—such as 12:00–12:01—and keep
+                  one counter per key. Increment the counter on every request and
+                  reject after it reaches 100. When 12:01 begins, reset it.
+                </p>
+                <p>
+                  It is simple and memory-efficient, but a client can send 100
+                  requests at 12:00:59 and another 100 at 12:01:00. The system
+                  sees 200 requests in two seconds while each window remains valid.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Sliding window log</h3>
+                <p>
+                  Store the timestamp of every accepted request. For a request at
+                  12:01:30, delete timestamps older than 12:00:30 and count what
+                  remains. Reject when there are already 100 entries.
+                </p>
+                <p>
+                  This gives an exact rolling-minute limit and removes the boundary
+                  burst. However, a busy key needs up to 100 stored timestamps,
+                  making memory and cleanup work grow with the limit.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Sliding window counter</h3>
+                <p>
+                  Keep only the current and previous fixed-window counters, then
+                  weight the previous one by how much of it overlaps the last
+                  minute. Halfway through a window, the estimate is
+                  <code>current + 0.5 × previous</code>.
+                </p>
+                <p>
+                  It uses constant memory and is much smoother than a fixed
+                  window. Because it estimates when requests happened inside the
+                  previous window, it can allow or reject a few requests incorrectly.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Token bucket</h3>
+                <p>
+                  Imagine a bucket that holds 100 tokens and refills continuously.
+                  Each request removes one token; an empty bucket rejects the
+                  request. Idle time fills the bucket and creates burst capacity.
+                </p>
+                <p>
+                  Capacity controls the maximum burst, while refill rate controls
+                  sustained traffic. It needs only the token balance and last
+                  refill time, making it the best default for this service.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Leaky bucket</h3>
+                <p>
+                  Think of requests entering a queue that drains at a constant
+                  rate, like water leaving a bucket through a small hole. If the
+                  queue is full, new requests are rejected.
+                </p>
+                <p>
+                  It turns bursty input into smooth output, which is useful for
+                  protecting a slow worker. Unlike token bucket, it delays queued
+                  requests, so it is less suitable for a gateway that must decide
+                  immediately.
+                </p>
+              </div>
+            </div>
+            <h3>Why this design chooses token bucket</h3>
+            <p>
+              API clients often need short bursts—for example, loading a page may
+              trigger several requests at once—but should still obey a long-term
+              quota. Token bucket models that behavior directly and keeps only
+              constant-size state per active key.
+            </p>
+            <div class="formula">
+              available = min(C, previous + elapsed_seconds × R)<br>
+              allow = available ≥ request_cost
+            </div>
+            <p>
+              A bucket with capacity 100 and refill rate 10 tokens/s lets an idle
+              client burst up to 100 requests, then sustain 10 requests/s. Requests
+              may have different costs: a cheap read can consume one token while
+              an expensive report consumes ten.
+            </p>
           </section>
 
           <section id="architecture">
