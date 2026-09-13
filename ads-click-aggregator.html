@@ -455,34 +455,96 @@
                 <span class="arrow">→</span>
                 <div class="node accent">Ingest API</div>
                 <span class="arrow">→</span>
-                <div class="node">Event log</div>
+                <div class="node">Kafka</div>
                 <span class="arrow">→</span>
-                <div class="node green">Stream jobs</div>
+                <div class="node green">Apache Flink</div>
                 <span class="arrow">→</span>
-                <div class="node">OLAP store</div>
+                <div class="node">ClickHouse</div>
                 <span class="arrow">→</span>
                 <div class="node accent">Query API</div>
               </div>
               <p class="diagram-caption">
-                Raw events also flow from the event log into immutable object storage.
+                Raw events also flow from Kafka into immutable Amazon S3 storage.
               </p>
             </div>
             <div class="grid-2">
               <div class="card">
                 <h3>Fast path</h3>
                 <p>
-                  Stream processors validate, deduplicate, and update minute
-                  buckets. The OLAP database serves dashboards within seconds.
+                  Flink validates, deduplicates, and updates minute buckets.
+                  ClickHouse serves dashboards within seconds.
                 </p>
               </div>
               <div class="card">
                 <h3>Truth path</h3>
                 <p>
-                  Every accepted raw event lands in object storage. Batch jobs
-                  replay and reconcile final totals for billing.
+                  Every accepted raw event lands in S3. Scheduled Flink batch
+                  jobs replay and reconcile final totals for billing.
                 </p>
               </div>
             </div>
+            <h3>Should this use Lambda architecture?</h3>
+            <p>
+              A classic Lambda architecture runs two independent implementations:
+              a speed layer for recent events and a batch layer that recomputes
+              authoritative views. It fits ad billing because raw clicks must be
+              retained, real-time totals may be provisional, and late or corrected
+              events must eventually produce exact invoices.
+            </p>
+            <p>
+              The drawback is duplicated business logic, operational cost, and
+              possible disagreement between the two layers. For this service, use
+              a <strong>Lambda-inspired, streaming-first design</strong>: Kafka is
+              the replayable log, Flink powers the live pipeline, S3 is the
+              long-term source of truth, and the same versioned validation and
+              aggregation rules run during reconciliation. This is simpler than
+              maintaining separate stream and batch codebases while retaining the
+              correctness benefit of a batch truth path.
+            </p>
+            <div class="callout">
+              <strong>Recommendation:</strong> do not add a batch layer merely
+              for scale. Add reconciliation because billing and fraud corrections
+              require auditability. If reports are operational rather than
+              financial, a pure Kappa architecture—replaying Kafka or S3 through
+              one stream pipeline—may be sufficient.
+            </div>
+            <h3>Example technology stack</h3>
+            <table class="decision">
+              <thead>
+                <tr>
+                  <th>Responsibility</th>
+                  <th>Example tool</th>
+                  <th>Why it fits</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Durable event stream</td>
+                  <td><strong>Apache Kafka</strong></td>
+                  <td>Partitioned ordering, replication, consumer replay, and burst buffering</td>
+                </tr>
+                <tr>
+                  <td>Stream and batch compute</td>
+                  <td><strong>Apache Flink</strong></td>
+                  <td>Event-time windows, watermarks, keyed state, checkpoints, and bounded batch input</td>
+                </tr>
+                <tr>
+                  <td>Raw source of truth</td>
+                  <td><strong>Amazon S3 + Parquet</strong></td>
+                  <td>Low-cost immutable retention for audit, replay, and reconciliation</td>
+                </tr>
+                <tr>
+                  <td>Interactive analytics</td>
+                  <td><strong>ClickHouse</strong></td>
+                  <td>Fast columnar aggregation across time and campaign dimensions</td>
+                </tr>
+                <tr>
+                  <td>Campaign metadata</td>
+                  <td><strong>PostgreSQL</strong></td>
+                  <td>Transactional campaign, advertiser, budget, and policy records</td>
+                </tr>
+              </tbody>
+            </table>
           </section>
 
           <section id="write-path">
@@ -520,10 +582,10 @@
               </li>
             </ol>
             <p>
-              Partition the log by a stable hash of <code>campaign_id</code>.
-              This preserves per-campaign ordering while distributing traffic.
-              Large campaigns can use a composite key such as
-              <code>campaign_id + shard_id</code>.
+              Publish the event to a Kafka topic keyed by a stable hash of
+              <code>campaign_id</code>. Kafka preserves order within each
+              partition while distributing traffic. Large campaigns can use a
+              composite key such as <code>campaign_id + shard_id</code>.
             </p>
           </section>
 
@@ -531,16 +593,38 @@
             <span class="section-number">05 / STREAM PROCESSING</span>
             <h2>Aggregate in event-time windows</h2>
             <p>
-              A stateful stream job consumes clicks, performs initial fraud
-              filtering, deduplicates by <code>event_id</code>, and maintains
-              one-minute tumbling windows. Event time—not arrival time—keeps a
-              delayed mobile click in the correct reporting period.
+              A Flink job consumes Kafka clicks, performs initial fraud filtering,
+              deduplicates by <code>event_id</code>, and maintains one-minute
+              tumbling windows. Event time—not arrival time—keeps a delayed mobile
+              click in the correct reporting period.
             </p>
             <div class="callout">
-              <strong>Late data policy:</strong> keep windows mutable for 10
-              minutes using watermarks. Events later than that are written to a
-              correction stream and folded in by reconciliation.
+              <strong>Late data policy:</strong> configure Flink watermarks and
+              allowed lateness to keep windows mutable for 10 minutes. Events
+              later than that go to a side output and correction topic, then are
+              folded in by reconciliation.
             </div>
+            <h3>Deduplication in Flink</h3>
+            <p>
+              Key the stream by <code>event_id</code> and store a “seen” marker
+              in Flink keyed state. On the first event, emit the click and register
+              state with a TTL longer than the client retry and lateness window.
+              Drop subsequent events while that marker exists. RocksDB-backed
+              state keeps large deduplication sets off the JVM heap, while
+              checkpoints persist state and Kafka offsets together.
+            </p>
+            <pre>clicks
+  .keyBy(event_id)
+  .process(DeduplicateWithTTL)
+  .keyBy(campaign_id, ad_id, shard)
+  .window(TumblingEventTimeWindows.of(1 minute))
+  .aggregate(ClickCount)</pre>
+            <p>
+              Flink checkpointing prevents duplicate state transitions during
+              recovery, but end-to-end exactly-once still depends on the sink.
+              Use idempotent ClickHouse writes with deterministic batch IDs or a
+              transactional staging-and-commit pattern.
+            </p>
             <h3>Rollups</h3>
             <p>
               Write low-cardinality, mergeable rows rather than incrementing one
@@ -575,22 +659,22 @@ merge:
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>Event log</strong></td>
+                  <td><strong>Kafka</strong></td>
                   <td>Buffer bursts, preserve order, enable short replays</td>
                   <td>3–7 days</td>
                 </tr>
                 <tr>
-                  <td><strong>Object storage</strong></td>
+                  <td><strong>S3 + Parquet</strong></td>
                   <td>Immutable raw events partitioned by event date/hour</td>
                   <td>Years</td>
                 </tr>
                 <tr>
-                  <td><strong>OLAP database</strong></td>
+                  <td><strong>ClickHouse</strong></td>
                   <td>Low-latency filtering, grouping, and time-series queries</td>
                   <td>13–24 months</td>
                 </tr>
                 <tr>
-                  <td><strong>Metadata database</strong></td>
+                  <td><strong>PostgreSQL</strong></td>
                   <td>Campaign state, budgets, advertiser configuration</td>
                   <td>Indefinite</td>
                 </tr>
@@ -615,26 +699,27 @@ merge:
             <h2>Design for retries and disagreement</h2>
             <h3>Deduplication</h3>
             <p>
-              Clients generate globally unique event IDs. The stream processor
-              keeps a partitioned ID state with a TTL longer than the normal
-              retry window. Database writes use deterministic bucket keys or
-              idempotent upserts. A probabilistic filter can reduce lookups, but
-              it must not be the only billing deduplicator because false positives
-              would discard legitimate revenue events.
+              Clients generate globally unique event IDs. Flink keeps partitioned
+              keyed state with a TTL longer than the normal retry window. Sink
+              writes use deterministic bucket and batch keys or idempotent
+              upserts. A probabilistic filter can reduce lookups, but it must not
+              be the only billing deduplicator because false positives would
+              discard legitimate revenue events.
             </p>
             <h3>Replay</h3>
             <p>
-              Stream jobs checkpoint offsets and state together. After a failure,
-              processing resumes from the last checkpoint. For code bugs, start a
-              new consumer from raw object storage, write to versioned aggregate
-              tables, validate totals, then atomically switch the query layer.
+              Flink checkpoints Kafka offsets and operator state together. After
+              a failure, processing resumes from the last successful checkpoint.
+              For code bugs, run the same versioned job against bounded Parquet
+              input from S3, write to versioned aggregate tables, validate totals,
+              then atomically switch the query layer.
             </p>
             <h3>Reconciliation</h3>
             <p>
-              A daily batch recomputes closed periods from immutable raw events,
-              compares results against stream aggregates, and emits adjustments.
-              Dashboards are provisional; reconciled rows are marked final and
-              become the source for invoices.
+              A daily Flink batch job recomputes closed periods from immutable
+              Parquet events in S3, compares results against stream aggregates,
+              and emits adjustments. Dashboards are provisional; reconciled rows
+              are marked final and become the source for invoices.
             </p>
             <div class="grid-2">
               <div class="card">
@@ -653,10 +738,10 @@ merge:
             <h2>Scale by partition, then isolate skew</h2>
             <ul>
               <li><strong>Ingest API:</strong> stateless instances behind regional load balancers; autoscale on request rate and queue latency.</li>
-              <li><strong>Event log:</strong> add partitions for throughput, replicate across availability zones, and alert on consumer lag.</li>
-              <li><strong>Stream state:</strong> use embedded state backed by durable checkpoints; rescale during low-traffic periods.</li>
+              <li><strong>Kafka:</strong> add partitions for throughput, use a replication factor of at least three across availability zones, and alert on consumer lag.</li>
+              <li><strong>Flink:</strong> use RocksDB-backed keyed state with durable S3 checkpoints; rescale job parallelism during low-traffic periods.</li>
               <li><strong>Hot campaigns:</strong> split one campaign across deterministic sub-shards and merge at query time.</li>
-              <li><strong>OLAP:</strong> partition by date, distribute by campaign hash, and sort by common filter dimensions.</li>
+              <li><strong>ClickHouse:</strong> partition by date, distribute by campaign hash, and order by common filter dimensions.</li>
               <li><strong>Regions:</strong> ingest locally and aggregate regionally; merge global reports asynchronously to avoid cross-region latency on every click.</li>
             </ul>
             <div class="callout">
@@ -696,12 +781,13 @@ merge:
             </p>
             <h3>Final design summary</h3>
             <p>
-              A durable log decouples ingestion from computation. Stateful stream
-              processing creates fast, provisional aggregates. Immutable raw
-              storage enables replay, audit, and correct billing. An OLAP store
-              serves flexible reports, while idempotency and reconciliation make
-              at-least-once infrastructure behave exactly once at the business
-              level.
+              Kafka decouples ingestion from computation. Stateful Flink jobs
+              create fast, provisional aggregates. S3 and Parquet enable replay,
+              audit, and correct billing. ClickHouse serves flexible reports,
+              while idempotency and reconciliation make at-least-once
+              infrastructure behave exactly once at the business level. This
+              streaming-first, Lambda-inspired design preserves a truth path
+              without requiring two unrelated implementations.
             </p>
           </section>
         </article>
