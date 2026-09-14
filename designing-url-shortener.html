@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a scalable, reliable URL shortener.">
+  <title>Designing a URL Shortener</title>
+  <style>
+    :root {
+      --bg:#f5f2ea; --surface:#fffdf8; --surface-2:#eee9dd;
+      --ink:#17211d; --muted:#65716a; --line:#d9d4c8;
+      --accent:#167c80; --accent-dark:#0d585b; --green:#176b55;
+      --blue:#285f8f; --red:#a9321d; --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif;
+    }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body {
+      margin:0; color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(22,124,128,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans);
+    }
+    a { color:var(--accent-dark); }
+    code {
+      padding:.14rem .35rem; border-radius:5px; background:var(--surface-2);
+      font-family:var(--mono); font-size:.9em;
+    }
+    pre {
+      overflow-x:auto; margin:1rem 0 0; padding:1.2rem;
+      border:1px solid #263931; border-radius:12px;
+      color:#e8f1ed; background:#13231d; font:.86rem/1.65 var(--mono);
+    }
+    .page { width:min(1160px,calc(100% - 32px)); margin:0 auto; }
+    .topbar {
+      display:flex; justify-content:space-between; align-items:center;
+      padding:22px 0; font-size:.86rem; letter-spacing:.08em; text-transform:uppercase;
+    }
+    .topbar a { color:var(--ink); font-weight:750; text-decoration:none; }
+    .status { display:inline-flex; align-items:center; gap:8px; color:var(--muted); }
+    .status::before {
+      width:8px; height:8px; border-radius:50%; background:var(--green);
+      content:""; box-shadow:0 0 0 4px rgba(23,107,85,.12);
+    }
+    .hero {
+      display:grid; grid-template-columns:1fr; gap:28px; align-items:end;
+      padding:70px 0 78px; border-top:1px solid var(--line);
+    }
+    .eyebrow {
+      margin:0 0 16px; color:var(--accent-dark); font-size:.82rem;
+      font-weight:800; letter-spacing:.16em; text-transform:uppercase;
+    }
+    h1,h2,h3 { text-wrap:balance; }
+    h1 {
+      max-width:none; margin:0; font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em; white-space:nowrap;
+    }
+    .lede { max-width:760px; margin:0; color:var(--muted); font:1.13rem/1.75 var(--serif); }
+    .meta { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; }
+    .pill {
+      padding:5px 10px; border:1px solid var(--line); border-radius:999px;
+      color:var(--muted); background:rgba(255,253,248,.55);
+      font-size:.78rem; font-weight:700;
+    }
+    .layout {
+      display:grid; grid-template-columns:210px minmax(0,760px);
+      gap:70px; justify-content:center; padding-bottom:110px;
+    }
+    aside { position:relative; }
+    nav {
+      position:sticky; top:24px; padding:18px 0;
+      border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    }
+    nav strong {
+      display:block; margin-bottom:10px; font-size:.72rem;
+      letter-spacing:.14em; text-transform:uppercase;
+    }
+    nav a {
+      display:block; padding:4px 0; color:var(--muted);
+      font-size:.82rem; text-decoration:none;
+    }
+    nav a:hover { color:var(--accent-dark); }
+    article > section { margin:0 0 76px; scroll-margin-top:28px; }
+    h2 {
+      margin:0 0 22px; font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em;
+    }
+    h3 { margin:30px 0 8px; font-size:1.04rem; letter-spacing:-.01em; }
+    p { margin:0 0 18px; }
+    ul,ol { padding-left:1.25rem; }
+    li { margin:.42rem 0; }
+    .section-number {
+      display:block; margin-bottom:8px; color:var(--accent);
+      font:700 .75rem/1 var(--mono); letter-spacing:.12em;
+    }
+    .callout {
+      margin:26px 0; padding:20px 22px; border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0; background:var(--surface); box-shadow:var(--shadow);
+    }
+    .callout strong { color:var(--accent-dark); }
+    .grid-2,.grid-3 { display:grid; gap:14px; margin:22px 0; }
+    .grid-2 { grid-template-columns:repeat(2,1fr); }
+    .grid-3 { grid-template-columns:repeat(3,1fr); }
+    .card {
+      padding:20px; border:1px solid var(--line); border-radius:14px;
+      background:rgba(255,253,248,.7);
+    }
+    .card h3 { margin-top:0; }
+    .card p,.card li { color:var(--muted); font-size:.9rem; }
+    .card p:last-child { margin-bottom:0; }
+    .metric { color:var(--accent-dark); font:700 1.85rem/1 var(--serif); }
+    .diagram {
+      overflow-x:auto; margin:28px 0; padding:28px 24px;
+      border:1px solid var(--line); border-radius:18px;
+      background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),
+        var(--surface);
+      background-size:24px 24px; box-shadow:var(--shadow);
+    }
+    .flow {
+      display:flex; min-width:680px; align-items:center;
+      justify-content:space-between; gap:8px;
+    }
+    .node {
+      min-width:112px; padding:13px 10px; border:1.5px solid var(--ink);
+      border-radius:10px; background:var(--surface); text-align:center;
+      font-size:.8rem; font-weight:750; box-shadow:4px 4px 0 var(--surface-2);
+    }
+    .node.accent { border-color:var(--accent); color:var(--accent-dark); }
+    .node.green { border-color:var(--green); color:var(--green); }
+    .node.blue { border-color:var(--blue); color:var(--blue); }
+    .arrow { color:var(--muted); font:700 1.2rem/1 var(--mono); }
+    .diagram-caption { margin:14px 0 0; color:var(--muted); font-size:.78rem; text-align:center; }
+    .decision {
+      width:100%; margin:18px 0; border-collapse:collapse; font-size:.86rem;
+    }
+    .decision th,.decision td {
+      padding:12px 10px; border-bottom:1px solid var(--line);
+      text-align:left; vertical-align:top;
+    }
+    .decision th {
+      color:var(--muted); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
+    }
+    .steps { margin:24px 0; padding:0; list-style:none; counter-reset:step; }
+    .steps li {
+      position:relative; min-height:52px; margin:0;
+      padding:0 0 24px 52px; counter-increment:step;
+    }
+    .steps li::before {
+      position:absolute; top:0; left:0; display:grid; width:32px; height:32px;
+      place-items:center; border-radius:50%; color:white; background:var(--accent);
+      content:counter(step); font:700 .78rem/1 var(--mono);
+    }
+    .steps li:not(:last-child)::after {
+      position:absolute; top:34px; bottom:2px; left:15px;
+      width:1px; background:var(--line); content:"";
+    }
+    .good { color:var(--green); font-weight:700; }
+    .warn { color:var(--red); font-weight:700; }
+    .footer {
+      display:flex; justify-content:space-between; gap:20px;
+      padding:35px 0 55px; border-top:1px solid var(--line);
+      color:var(--muted); font-size:.8rem;
+    }
+    @media (max-width:820px) {
+      .hero { grid-template-columns:1fr; gap:28px; padding:48px 0 60px; }
+      .layout { display:block; } aside { display:none; }
+      .grid-3 { grid-template-columns:1fr; }
+    }
+    @media (max-width:560px) {
+      .page { width:min(100% - 24px,1160px); }
+      h1 { font-size:3.05rem; white-space:normal; }
+      .grid-2 { grid-template-columns:1fr; } .footer { display:block; }
+    }
+    @media print {
+      body { background:white; } .topbar,aside { display:none; }
+      .hero,.layout { display:block; } article > section { break-inside:avoid; }
+      .card,.diagram,.callout { box-shadow:none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a URL Shortener</h1>
+          <div class="meta">
+            <span class="pill">Key generation</span>
+            <span class="pill">Caching</span>
+            <span class="pill">Multi-region</span>
+            <span class="pill">12 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we turn long URLs into compact links that redirect in
+          milliseconds, survive viral traffic, and remain safe to operate?
+          The design optimizes a read-heavy hot path without weakening creation
+          correctness or abuse controls.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#codes">Short-code choices</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#create">Creation path</a>
+            <a href="#redirect">Redirect path</a>
+            <a href="#storage">Storage</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#safety">Abuse and safety</a>
+            <a href="#analytics">Analytics</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Make redirects fast and links durable</h2>
+            <p>
+              Users submit a long URL and receive a short link. Visiting the
+              short link redirects to its destination. Optional features include
+              custom aliases, expiration, link disabling, and click analytics.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Create random or custom short links</li>
+                  <li>Redirect to the original destination</li>
+                  <li>Expire, disable, and delete owned links</li>
+                  <li>Report asynchronous click analytics</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>Redirect latency below 50 ms at p99</li>
+                  <li>99.99% redirect availability</li>
+                  <li>No two active links share a code</li>
+                  <li>Links remain available across regions</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Scope decision:</strong> destinations are mutable only for
+              authenticated owners. Publicly changing a link after distribution
+              creates phishing risk and makes caches harder to reason about.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Expect far more redirects than writes</h2>
+            <p>
+              Assume 100 million new links and 10 billion redirects each day,
+              with a 5× peak multiplier. A mapping record averages 1 KB after
+              indexes and metadata.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">1.2k/s</div>
+                <h3>average creates</h3>
+                <p>Roughly 5.8k/s at peak.</p>
+              </div>
+              <div class="card">
+                <div class="metric">116k/s</div>
+                <h3>average redirects</h3>
+                <p>Roughly 580k/s at peak.</p>
+              </div>
+              <div class="card">
+                <div class="metric">36.5 TB</div>
+                <h3>mapping data/year</h3>
+                <p>Before replication and secondary indexes.</p>
+              </div>
+            </div>
+            <p>
+              The 100:1 read-to-write ratio makes edge and Redis caching highly
+              effective. Analytics volume is comparable to redirect volume, but
+              analytics must never delay the redirect response.
+            </p>
+          </section>
+
+          <section id="codes">
+            <span class="section-number">03 / KEY GENERATION</span>
+            <h2>Prefer random Base62 codes</h2>
+            <p>
+              Base62 uses digits, lowercase letters, and uppercase letters. Ten
+              characters provide <code>62¹⁰ ≈ 8.39 × 10¹⁷</code> possible codes.
+              Generate bytes with a cryptographically secure random source,
+              encode them, and use a conditional database insert to detect the
+              extremely unlikely collision.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Approach</th><th>Strength</th><th>Weakness</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Counter + Base62</strong></td>
+                  <td>Compact and collision-free</td>
+                  <td>Needs ID coordination and exposes creation order</td>
+                </tr>
+                <tr>
+                  <td><strong>Hash of URL</strong></td>
+                  <td>Same input can produce the same code</td>
+                  <td>Truncation collides; users may need separate links for one URL</td>
+                </tr>
+                <tr>
+                  <td><strong>Random Base62</strong></td>
+                  <td>Decentralized and difficult to enumerate</td>
+                  <td>Must retry on a conditional-write collision</td>
+                </tr>
+              </tbody>
+            </table>
+            <pre>alphabet = 0-9 a-z A-Z
+code_length = 10
+namespace = 62^10 = 839,299,365,868,340,224
+
+repeat:
+  code = secureRandomBase62(10)
+until PutIfAbsent(code, mapping) succeeds</pre>
+            <p>
+              Do not compute <code>hash(long_url)</code> as the identifier.
+              Different owners may want separate expiration and analytics for the
+              same destination. Instead, support idempotent creation using a
+              client-provided idempotency key.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Separate creation from redirection</h2>
+            <div class="diagram" role="img" aria-label="URL shortener architecture">
+              <div class="flow">
+                <div class="node">Browser</div>
+                <span class="arrow">→</span>
+                <div class="node blue">Cloudflare</div>
+                <span class="arrow">→</span>
+                <div class="node accent">Go redirect API</div>
+                <span class="arrow">→</span>
+                <div class="node green">Redis</div>
+                <span class="arrow">→</span>
+                <div class="node">DynamoDB</div>
+                <span class="arrow">→</span>
+                <div class="node accent">Kafka</div>
+              </div>
+              <p class="diagram-caption">
+                The creation API writes DynamoDB; redirect events flow asynchronously to Kafka.
+              </p>
+            </div>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Write path</h3>
+                <p>
+                  Authenticated creation performs validation, safety checks, and a
+                  conditional insert before warming caches.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Read path</h3>
+                <p>
+                  A small stateless service resolves codes through a Cloudflare
+                  Worker mapping cache, local memory, Redis, then DynamoDB.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="create">
+            <span class="section-number">05 / CREATION</span>
+            <h2>Validate before publishing a link</h2>
+            <pre>POST /v1/links
+Idempotency-Key: 0199f02d-...
+{
+  "url": "https://example.com/articles/system-design",
+  "custom_alias": null,
+  "expires_at": "2027-09-14T00:00:00Z"
+}
+
+201 Created
+{
+  "code": "q7Ba31ZmP2",
+  "short_url": "https://sho.rt/q7Ba31ZmP2"
+}</pre>
+            <ol class="steps">
+              <li>
+                <strong>Authenticate and rate-limit.</strong> Apply stricter
+                limits to anonymous users and custom-alias attempts.
+              </li>
+              <li>
+                <strong>Normalize and validate.</strong> Accept only HTTP(S),
+                enforce length limits, canonicalize the host, and reject internal
+                network destinations.
+              </li>
+              <li>
+                <strong>Check reputation.</strong> Evaluate blocklists, domain
+                age, malware signals, and account trust before activation.
+              </li>
+              <li>
+                <strong>Claim the code.</strong> Use DynamoDB conditional
+                <code>attribute_not_exists(code)</code>; regenerate on collision.
+              </li>
+              <li>
+                <strong>Warm and respond.</strong> Populate Redis and return only
+                after the durable mapping exists.
+              </li>
+            </ol>
+            <p>
+              Custom aliases use the same conditional insert and namespace as
+              generated codes. Reserve system paths such as <code>api</code>,
+              <code>admin</code>, and <code>health</code>. Normalize alias case
+              if links should be case-insensitive.
+            </p>
+          </section>
+
+          <section id="redirect">
+            <span class="section-number">06 / HOT PATH</span>
+            <h2>Resolve through layered caches</h2>
+            <ol class="steps">
+              <li>
+                A Cloudflare Worker checks its internal mapping cache for popular
+                immutable links; this is separate from browser redirect caching.
+              </li>
+              <li>
+                The Go service checks a bounded in-process TinyLFU cache.
+              </li>
+              <li>
+                On a local miss, it reads the regional Redis Cluster.
+              </li>
+              <li>
+                On a Redis miss, it performs a strongly or eventually consistent
+                DynamoDB read according to the link's age.
+              </li>
+              <li>
+                It returns the redirect immediately and publishes analytics
+                through a non-blocking local Kafka producer.
+              </li>
+            </ol>
+            <pre>HTTP/1.1 302 Found
+Location: https://example.com/articles/system-design
+Cache-Control: private, no-store</pre>
+            <p>
+              Use <strong>302</strong> by default. Browsers and intermediaries may
+              cache 301 redirects permanently, preventing destination changes,
+              disablement, and accurate analytics. For immutable links, an owner
+              can explicitly opt into a cacheable 301 or 308 response.
+            </p>
+            <h3>Negative caching</h3>
+            <p>
+              Cache unknown codes for a short period, such as 30 seconds, to stop
+              random scans from repeatedly hitting DynamoDB. Invalidate the
+              negative entry after a successful creation of that code.
+            </p>
+            <div class="callout">
+              <strong>Analytics never blocks redirect.</strong> If Kafka is
+              unavailable, buffer a bounded number of events locally and then
+              sample or drop analytics. Sending the user to the destination is
+              the primary availability goal.
+            </div>
+          </section>
+
+          <section id="storage">
+            <span class="section-number">07 / DATA MODEL</span>
+            <h2>Key mappings by short code</h2>
+            <pre>URLMapping {
+  code            string       // partition key
+  destination     string
+  owner_id        string
+  created_at      timestamp
+  expires_at      timestamp?
+  status          ACTIVE | DISABLED | BLOCKED
+  redirect_type   302 | 301
+  version         integer
+}</pre>
+            <p>
+              The dominant lookup is <code>code → destination</code>, which maps
+              directly to a DynamoDB partition key. Keep an owner-to-links index
+              for management pages, but do not make redirect depend on that index.
+              DynamoDB TTL removes expired records eventually; the application
+              must still check <code>expires_at</code> because TTL deletion is not
+              immediate.
+            </p>
+            <h3>Cache correctness</h3>
+            <p>
+              Cache values include mapping version, status, and expiration. An
+              update writes DynamoDB first, then publishes an invalidation event.
+              Short TTLs bound stale redirects if invalidation is lost. Blocking
+              a malicious link writes a high-priority deny entry to every regional
+              Redis cluster before asynchronous cache cleanup.
+            </p>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">08 / MULTI-REGION</span>
+            <h2>Read locally, give each code one writer</h2>
+            <p>
+              DynamoDB Global Tables replicate mappings to each region, and every
+              region has its own Redis cache and stateless redirect service.
+              Redirects use the nearest healthy region and tolerate replication
+              lag for newly created links.
+            </p>
+            <p>
+              Multi-active conditional writes are not enough for strict custom
+              alias uniqueness: two regions can claim the same absent alias
+              before replication converges. Route creation by
+              <code>hash(code)</code> to a deterministic home region. That region
+              is the single writer for the code; all regions remain readers.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>New generated link</h3>
+                <p>
+                  Random codes are generated near the user, then claimed in the
+                  code's home region. Cache the result locally after success.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Home-region outage</h3>
+                <p>
+                  Existing links still redirect globally. Pause custom creation
+                  for affected keys rather than risk duplicate ownership.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="safety">
+            <span class="section-number">09 / TRUST</span>
+            <h2>A shortener is also an abuse platform</h2>
+            <ul>
+              <li><strong>SSRF:</strong> reject loopback, link-local, private, and cloud-metadata destinations after DNS resolution.</li>
+              <li><strong>Phishing:</strong> scan destinations at creation and periodically after redirects begin.</li>
+              <li><strong>Malware:</strong> integrate browser-safe browsing feeds and internal reputation models.</li>
+              <li><strong>Enumeration:</strong> use CSPRNG codes and return uniform errors for unknown or blocked links.</li>
+              <li><strong>Bot traffic:</strong> rate-limit by account, IP, ASN, and behavioral signals.</li>
+              <li><strong>Takedowns:</strong> maintain an auditable moderation workflow and globally fast deny propagation.</li>
+            </ul>
+            <p>
+              A destination can become malicious after creation or redirect through
+              several domains. Run asynchronous rescans and disable links when
+              reputation changes. Show an interstitial for suspicious destinations
+              instead of silently forwarding users.
+            </p>
+          </section>
+
+          <section id="analytics">
+            <span class="section-number">10 / EVENTS</span>
+            <h2>Aggregate clicks asynchronously</h2>
+            <pre>redirect event
+  → Kafka partitioned by code
+  → Flink bot filtering + deduplication
+  → minute aggregates
+  → ClickHouse reports
+  → S3 + Parquet archive</pre>
+            <p>
+              Events include code, timestamp, coarse geography, referrer domain,
+              device category, edge region, and a privacy-safe session hash. Do
+              not store raw IP addresses indefinitely. Flink uses event-time
+              windows and tolerates late edge events.
+            </p>
+            <p>
+              Dashboard counts are eventually consistent and may exclude known
+              bots. Billing-grade links need immutable raw events, versioned fraud
+              rules, and periodic reconciliation—the same correctness pattern as
+              an ads click aggregator.
+            </p>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">11 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Edge and protection</td><td><strong>Cloudflare Workers</strong></td><td>Anycast routing, DDoS controls, WAF, and an internal mapping cache</td></tr>
+                <tr><td>Create and redirect APIs</td><td><strong>Go</strong></td><td>Low-latency services and efficient connection handling</td></tr>
+                <tr><td>Durable mappings</td><td><strong>DynamoDB Global Tables</strong></td><td>Key-value scale, conditional writes, TTL, and replication</td></tr>
+                <tr><td>Regional cache</td><td><strong>Redis Cluster</strong></td><td>Fast hot-key reads, negative caching, and explicit invalidation</td></tr>
+                <tr><td>Event transport</td><td><strong>Apache Kafka</strong></td><td>Buffers redirect events without coupling them to responses</td></tr>
+                <tr><td>Analytics pipeline</td><td><strong>Flink + ClickHouse</strong></td><td>Streaming aggregation and interactive reports</td></tr>
+                <tr><td>Raw analytics</td><td><strong>S3 + Parquet</strong></td><td>Low-cost retention, replay, and reconciliation</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Redirect SLOs, cache hit rates, and regional health</td></tr>
+              </tbody>
+            </table>
+            <h3>Production signals</h3>
+            <ul>
+              <li>Redirect latency and availability by region</li>
+              <li>Edge, local, and Redis cache hit rates</li>
+              <li>DynamoDB throttling and replication lag</li>
+              <li>Creation collisions and custom-alias conflicts</li>
+              <li>Blocked-link traffic and reputation-scan age</li>
+              <li>Kafka producer drops and analytics consumer lag</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              Generate unguessable ten-character Base62 codes and claim them with
+              conditional writes. Store mappings in DynamoDB, resolve popular
+              links through Cloudflare and Redis, and keep the Go redirect path
+              independent from analytics. Give each code one write region while
+              replicating reads globally. Kafka, Flink, ClickHouse, and S3 handle
+              click reporting without delaying redirects, while continuous safety
+              scanning limits the abuse inherent in public short links.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
