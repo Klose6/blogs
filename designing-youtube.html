@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a global video platform like YouTube.">
+  <title>Designing YouTube</title>
+  <style>
+    :root {
+      --bg:#f5f2ea; --surface:#fffdf8; --surface-2:#eee9dd;
+      --ink:#17211d; --muted:#65716a; --line:#d9d4c8;
+      --accent:#d74732; --accent-dark:#9d2818; --green:#176b55;
+      --blue:#285f8f; --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif;
+    }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body {
+      margin:0; color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(215,71,50,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans);
+    }
+    a { color:var(--accent-dark); }
+    code {
+      padding:.14rem .35rem; border-radius:5px; background:var(--surface-2);
+      font-family:var(--mono); font-size:.9em;
+    }
+    pre {
+      overflow-x:auto; margin:1rem 0 0; padding:1.2rem;
+      border:1px solid #263931; border-radius:12px;
+      color:#e8f1ed; background:#13231d; font:.86rem/1.65 var(--mono);
+    }
+    .page { width:min(1160px,calc(100% - 32px)); margin:0 auto; }
+    .topbar {
+      display:flex; justify-content:space-between; align-items:center;
+      padding:22px 0; font-size:.86rem; letter-spacing:.08em; text-transform:uppercase;
+    }
+    .topbar a { color:var(--ink); font-weight:750; text-decoration:none; }
+    .status { display:inline-flex; align-items:center; gap:8px; color:var(--muted); }
+    .status::before {
+      width:8px; height:8px; border-radius:50%; background:var(--green);
+      content:""; box-shadow:0 0 0 4px rgba(23,107,85,.12);
+    }
+    .hero {
+      display:grid; grid-template-columns:1fr;
+      gap:28px; align-items:end; padding:70px 0 78px; border-top:1px solid var(--line);
+    }
+    .eyebrow {
+      margin:0 0 16px; color:var(--accent-dark); font-size:.82rem;
+      font-weight:800; letter-spacing:.16em; text-transform:uppercase;
+    }
+    h1,h2,h3 { text-wrap:balance; }
+    h1 {
+      max-width:none; margin:0; font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em; white-space:nowrap;
+    }
+    .lede { max-width:760px; margin:0; color:var(--muted); font:1.13rem/1.75 var(--serif); }
+    .meta { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; }
+    .pill {
+      padding:5px 10px; border:1px solid var(--line); border-radius:999px;
+      color:var(--muted); background:rgba(255,253,248,.55);
+      font-size:.78rem; font-weight:700;
+    }
+    .layout {
+      display:grid; grid-template-columns:210px minmax(0,760px);
+      gap:70px; justify-content:center; padding-bottom:110px;
+    }
+    aside { position:relative; }
+    nav {
+      position:sticky; top:24px; padding:18px 0;
+      border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    }
+    nav strong {
+      display:block; margin-bottom:10px; font-size:.72rem;
+      letter-spacing:.14em; text-transform:uppercase;
+    }
+    nav a {
+      display:block; padding:4px 0; color:var(--muted);
+      font-size:.82rem; text-decoration:none;
+    }
+    nav a:hover { color:var(--accent-dark); }
+    article > section { margin:0 0 76px; scroll-margin-top:28px; }
+    h2 {
+      margin:0 0 22px; font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em;
+    }
+    h3 { margin:30px 0 8px; font-size:1.04rem; letter-spacing:-.01em; }
+    p { margin:0 0 18px; }
+    ul,ol { padding-left:1.25rem; }
+    li { margin:.42rem 0; }
+    .section-number {
+      display:block; margin-bottom:8px; color:var(--accent);
+      font:700 .75rem/1 var(--mono); letter-spacing:.12em;
+    }
+    .callout {
+      margin:26px 0; padding:20px 22px; border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0; background:var(--surface); box-shadow:var(--shadow);
+    }
+    .callout strong { color:var(--accent-dark); }
+    .grid-2,.grid-3 { display:grid; gap:14px; margin:22px 0; }
+    .grid-2 { grid-template-columns:repeat(2,1fr); }
+    .grid-3 { grid-template-columns:repeat(3,1fr); }
+    .card {
+      padding:20px; border:1px solid var(--line); border-radius:14px;
+      background:rgba(255,253,248,.7);
+    }
+    .card h3 { margin-top:0; }
+    .card p,.card li { color:var(--muted); font-size:.9rem; }
+    .card p:last-child { margin-bottom:0; }
+    .metric { color:var(--accent-dark); font:700 1.85rem/1 var(--serif); }
+    .diagram {
+      overflow-x:auto; margin:28px 0; padding:28px 24px;
+      border:1px solid var(--line); border-radius:18px;
+      background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),
+        var(--surface);
+      background-size:24px 24px; box-shadow:var(--shadow);
+    }
+    .flow {
+      display:flex; min-width:680px; align-items:center;
+      justify-content:space-between; gap:8px;
+    }
+    .node {
+      min-width:112px; padding:13px 10px; border:1.5px solid var(--ink);
+      border-radius:10px; background:var(--surface); text-align:center;
+      font-size:.8rem; font-weight:750; box-shadow:4px 4px 0 var(--surface-2);
+    }
+    .node.accent { border-color:var(--accent); color:var(--accent-dark); }
+    .node.green { border-color:var(--green); color:var(--green); }
+    .node.blue { border-color:var(--blue); color:var(--blue); }
+    .arrow { color:var(--muted); font:700 1.2rem/1 var(--mono); }
+    .diagram-caption { margin:14px 0 0; color:var(--muted); font-size:.78rem; text-align:center; }
+    .decision {
+      width:100%; margin:18px 0; border-collapse:collapse; font-size:.86rem;
+    }
+    .decision th,.decision td {
+      padding:12px 10px; border-bottom:1px solid var(--line);
+      text-align:left; vertical-align:top;
+    }
+    .decision th {
+      color:var(--muted); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
+    }
+    .steps { margin:24px 0; padding:0; list-style:none; counter-reset:step; }
+    .steps li {
+      position:relative; min-height:52px; margin:0;
+      padding:0 0 24px 52px; counter-increment:step;
+    }
+    .steps li::before {
+      position:absolute; top:0; left:0; display:grid; width:32px; height:32px;
+      place-items:center; border-radius:50%; color:white; background:var(--accent);
+      content:counter(step); font:700 .78rem/1 var(--mono);
+    }
+    .steps li:not(:last-child)::after {
+      position:absolute; top:34px; bottom:2px; left:15px;
+      width:1px; background:var(--line); content:"";
+    }
+    .good { color:var(--green); font-weight:700; }
+    .warn { color:var(--accent-dark); font-weight:700; }
+    .footer {
+      display:flex; justify-content:space-between; gap:20px;
+      padding:35px 0 55px; border-top:1px solid var(--line);
+      color:var(--muted); font-size:.8rem;
+    }
+    @media (max-width:820px) {
+      .hero { grid-template-columns:1fr; gap:28px; padding:48px 0 60px; }
+      .layout { display:block; } aside { display:none; }
+      .grid-3 { grid-template-columns:1fr; }
+    }
+    @media (max-width:560px) {
+      .page { width:min(100% - 24px,1160px); }
+      h1 { font-size:3.05rem; white-space:normal; } .grid-2 { grid-template-columns:1fr; }
+      .footer { display:block; }
+    }
+    @media print {
+      body { background:white; } .topbar,aside { display:none; }
+      .hero,.layout { display:block; } article > section { break-inside:avoid; }
+      .card,.diagram,.callout { box-shadow:none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing YouTube</h1>
+          <div class="meta">
+            <span class="pill">Video processing</span>
+            <span class="pill">Object storage</span>
+            <span class="pill">CDN</span>
+            <span class="pill">15 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we accept massive video uploads, transcode each file into many
+          formats, and stream billions of playbacks globally? The core design
+          separates durable media processing from low-latency video delivery.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Scope</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#upload">Upload path</a>
+            <a href="#processing">Video processing</a>
+            <a href="#playback">Playback and CDN</a>
+            <a href="#metadata">Metadata and search</a>
+            <a href="#engagement">Views and engagement</a>
+            <a href="#reliability">Reliability</a>
+            <a href="#tools">Technology stack</a>
+            <a href="#operations">Operations</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Design video on demand first</h2>
+            <p>
+              Users upload videos, creators manage metadata and visibility, and
+              viewers search for and stream content on many devices. This design
+              covers video on demand. Live streaming and recommendation-model
+              training are separate systems with different latency requirements.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Resumable video upload and processing</li>
+                  <li>Adaptive playback on web, mobile, and TV</li>
+                  <li>Titles, descriptions, thumbnails, and search</li>
+                  <li>Views, likes, comments, and subscriptions</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>High upload durability and playback availability</li>
+                  <li>Playback starts in under two seconds at p95</li>
+                  <li>Globally low buffering through edge delivery</li>
+                  <li>Eventual consistency for counts and search</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>The dominant cost is video bytes, not API calls.</strong>
+              Upload control, metadata, and engagement are ordinary distributed
+              services; transcoding, storage, and CDN egress drive the design.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Estimate media separately from metadata</h2>
+            <p>
+              Assume 500 hours uploaded each minute, a 5 Mbps average source
+              bitrate, five encoded renditions totaling 8 Mbps, and 100 million
+              daily viewers watching 30 minutes each at an average 3 Mbps.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">1.6 PB</div>
+                <h3>source uploads/day</h3>
+                <p>500 hours/minute at an average 5 Mbps.</p>
+              </div>
+              <div class="card">
+                <div class="metric">2.6 PB</div>
+                <h3>encoded output/day</h3>
+                <p>Multiple resolutions and codecs dominate storage.</p>
+              </div>
+              <div class="card">
+                <div class="metric">6.25 Tbps</div>
+                <h3>average playback</h3>
+                <p>Before peak multiplier and CDN cache savings.</p>
+              </div>
+            </div>
+            <p>
+              The exact numbers matter less than their shape: uploads are large
+              and asynchronous, encoded media grows by several copies per source,
+              and playback bandwidth is orders of magnitude larger than metadata
+              traffic. Clients should transfer bytes directly to object storage
+              and fetch playback segments from a CDN.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">03 / HIGH LEVEL</span>
+            <h2>Split control plane from media plane</h2>
+            <div class="diagram" role="img" aria-label="YouTube high-level architecture">
+              <div class="flow">
+                <div class="node">Client</div>
+                <span class="arrow">→</span>
+                <div class="node accent">API services</div>
+                <span class="arrow">→</span>
+                <div class="node">Kafka</div>
+                <span class="arrow">→</span>
+                <div class="node green">Transcoders</div>
+                <span class="arrow">→</span>
+                <div class="node">S3 media</div>
+                <span class="arrow">→</span>
+                <div class="node blue">CDN</div>
+              </div>
+              <p class="diagram-caption">
+                PostgreSQL and Cassandra store metadata; OpenSearch powers discovery.
+              </p>
+            </div>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Control plane</h3>
+                <p>
+                  APIs authenticate users, create upload sessions, store metadata,
+                  authorize playback, and orchestrate processing state.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Media plane</h3>
+                <p>
+                  Object storage receives source files, workers create renditions,
+                  and CDNs deliver immutable manifests and segments to viewers.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="upload">
+            <span class="section-number">04 / INGESTION</span>
+            <h2>Upload directly and resumably</h2>
+            <pre>POST /v1/videos/uploads
+{
+  "title": "Building a storage engine",
+  "content_type": "video/mp4",
+  "size_bytes": 4294967296
+}
+
+201 Created
+{
+  "video_id": "vid_...",
+  "upload_id": "s3-multipart-id",
+  "part_size": 16777216,
+  "part_urls": ["https://signed-upload/..."]
+}</pre>
+            <ol class="steps">
+              <li>
+                <strong>Create a session.</strong> The Go API authenticates the
+                creator, checks quota, creates a private video row, and starts an
+                S3 multipart upload.
+              </li>
+              <li>
+                <strong>Send chunks directly.</strong> The client uploads parts
+                to S3 using short-lived presigned URLs and retries failed parts.
+              </li>
+              <li>
+                <strong>Finalize safely.</strong> The API validates uploaded part
+                checksums, completes the multipart object, and emits an event.
+              </li>
+              <li>
+                <strong>Process asynchronously.</strong> Kafka triggers malware
+                scanning, metadata extraction, moderation, and transcoding.
+              </li>
+            </ol>
+            <p>
+              The API never proxies multi-gigabyte video bytes. Multipart upload
+              supports pause and resume, parallel chunks, integrity checks, and
+              cleanup of abandoned sessions. Keep source objects private and
+              encrypt them with a managed KMS key.
+            </p>
+          </section>
+
+          <section id="processing">
+            <span class="section-number">05 / TRANSCODING</span>
+            <h2>Model processing as an idempotent DAG</h2>
+            <div class="diagram" role="img" aria-label="Video processing pipeline">
+              <div class="flow">
+                <div class="node">Source video</div>
+                <span class="arrow">→</span>
+                <div class="node accent">Probe + scan</div>
+                <span class="arrow">→</span>
+                <div class="node green">FFmpeg jobs</div>
+                <span class="arrow">→</span>
+                <div class="node">Segments</div>
+                <span class="arrow">→</span>
+                <div class="node blue">HLS / DASH</div>
+                <span class="arrow">→</span>
+                <div class="node">Publish</div>
+              </div>
+            </div>
+            <p>
+              An orchestrator expands one uploaded source into independent jobs:
+              probe codecs, scan content, generate thumbnails and captions,
+              encode each resolution, package segments, validate outputs, then
+              publish the manifest. Independent jobs run in parallel.
+            </p>
+            <h3>Rendition ladder</h3>
+            <table class="decision">
+              <thead>
+                <tr><th>Resolution</th><th>Typical bitrate</th><th>Codec</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>360p</td><td>0.7 Mbps</td><td>H.264 for broad compatibility</td></tr>
+                <tr><td>720p</td><td>2.5 Mbps</td><td>H.264 and VP9</td></tr>
+                <tr><td>1080p</td><td>5 Mbps</td><td>H.264, VP9, or AV1</td></tr>
+                <tr><td>4K</td><td>15–25 Mbps</td><td>VP9 or AV1</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Select the ladder from source resolution, frame rate, motion, and
+              popularity prediction. AV1 reduces delivery bytes but costs more
+              compute, so encode it first for videos likely to receive many views.
+            </p>
+            <div class="callout">
+              <strong>Idempotency:</strong> key every output by
+              <code>video_id + source_version + profile_version</code>. Retries
+              overwrite or detect the same artifact rather than creating
+              conflicting versions. Publish only after all required outputs pass
+              validation.
+            </div>
+          </section>
+
+          <section id="playback">
+            <span class="section-number">06 / DELIVERY</span>
+            <h2>Stream small immutable segments</h2>
+            <ol class="steps">
+              <li>
+                The viewer requests video metadata and playback authorization.
+              </li>
+              <li>
+                The API returns a signed HLS or MPEG-DASH manifest URL.
+              </li>
+              <li>
+                The player chooses a rendition from bandwidth, viewport, and buffer health.
+              </li>
+              <li>
+                It downloads two-to-six-second segments from the nearest CDN edge.
+              </li>
+              <li>
+                Adaptive bitrate logic moves up or down without restarting playback.
+              </li>
+            </ol>
+            <p>
+              Segment files are immutable and content-versioned, so CDN entries
+              can use long cache lifetimes. Manifests may have shorter TTLs when
+              visibility or available renditions can change. Use origin shield
+              caches to stop a newly viral video from overwhelming object storage.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Cache hit</h3>
+                <p>The edge serves bytes near the viewer with low latency and no origin work.</p>
+              </div>
+              <div class="card">
+                <h3>Cache miss</h3>
+                <p>The edge fetches once through a regional shield, caches the segment, and serves later viewers.</p>
+              </div>
+            </div>
+            <p>
+              Signed cookies are usually better than signing every segment URL:
+              they authorize a path prefix for a short playback session without
+              generating thousands of unique cache keys.
+            </p>
+          </section>
+
+          <section id="metadata">
+            <span class="section-number">07 / DISCOVERY</span>
+            <h2>Store metadata by access pattern</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Data</th><th>Store</th><th>Reason</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Users, channels, video state</td>
+                  <td><strong>PostgreSQL</strong></td>
+                  <td>Transactions, constraints, and creator management</td>
+                </tr>
+                <tr>
+                  <td>Comments and subscriptions</td>
+                  <td><strong>Cassandra</strong></td>
+                  <td>High write scale and partitioned timeline reads</td>
+                </tr>
+                <tr>
+                  <td>Search documents</td>
+                  <td><strong>OpenSearch</strong></td>
+                  <td>Text analysis, ranking, filters, and autocomplete</td>
+                </tr>
+                <tr>
+                  <td>Hot metadata</td>
+                  <td><strong>Redis</strong></td>
+                  <td>Low-latency cache for viral videos and channels</td>
+                </tr>
+                <tr>
+                  <td>Video bytes</td>
+                  <td><strong>S3</strong></td>
+                  <td>Durable, cheap, effectively unlimited object storage</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              After a metadata transaction commits, publish an outbox event to
+              Kafka. Consumers update OpenSearch, invalidate Redis, and notify
+              subscribers. Search may lag the source database by seconds; the
+              video page reads authoritative visibility before returning playback
+              credentials.
+            </p>
+          </section>
+
+          <section id="engagement">
+            <span class="section-number">08 / COUNTERS</span>
+            <h2>Do not write one row per view synchronously</h2>
+            <p>
+              Players send heartbeats containing watch duration, position, and a
+              session ID. The event API validates basic fields and appends events
+              to Kafka. Flink deduplicates retries, detects obvious bots, and
+              aggregates views and watch time into minute buckets.
+            </p>
+            <pre>playback event
+  → Kafka partitioned by video_id
+  → Flink validation + session deduplication
+  → ClickHouse analytics
+  → compacted counters in Cassandra / Redis</pre>
+            <p>
+              Displayed counts are eventually consistent and can be approximate.
+              Likes are different: a user should have at most one active like per
+              video, so store <code>(user_id, video_id)</code> idempotently and
+              update the displayed total asynchronously.
+            </p>
+            <p>
+              Subscription feeds can fan out new videos to ordinary subscribers
+              on publish. For channels with millions of subscribers, use fan-out
+              on read to avoid a huge write burst, then merge those channel posts
+              into the viewer's home timeline.
+            </p>
+          </section>
+
+          <section id="reliability">
+            <span class="section-number">09 / FAILURE HANDLING</span>
+            <h2>Prefer repairable asynchronous work</h2>
+            <ul>
+              <li><strong>Upload interruption:</strong> retain multipart state so the client resumes only missing chunks.</li>
+              <li><strong>Duplicate events:</strong> use video ID, source version, and job type as an idempotency key.</li>
+              <li><strong>Transcoder failure:</strong> retry with exponential backoff, then move poison jobs to a dead-letter topic.</li>
+              <li><strong>Regional outage:</strong> route APIs to another region and serve replicated media from the CDN.</li>
+              <li><strong>CDN failure:</strong> use multiple CDN providers for high-value markets and keep origin failover available.</li>
+              <li><strong>Bad encoding release:</strong> preserve the source and rerun a previous profile version.</li>
+            </ul>
+            <p>
+              Store source media and manifests in cross-region replicated buckets.
+              Metadata databases need tested backups and point-in-time recovery.
+              CDN loss should reduce performance, not destroy the only media copy.
+            </p>
+            <div class="callout">
+              A video becomes <strong>PLAYABLE</strong> after one baseline rendition
+              and manifest are valid; higher resolutions can appear later. This
+              reduces creator wait time without exposing incomplete artifacts.
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">10 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>APIs</td><td><strong>Go + gRPC/HTTP</strong></td><td>Efficient services and clear internal contracts</td></tr>
+                <tr><td>Source and encoded media</td><td><strong>Amazon S3</strong></td><td>Multipart upload, durability, lifecycle policies</td></tr>
+                <tr><td>Workflow events</td><td><strong>Apache Kafka</strong></td><td>Durable buffering, replay, and independent consumers</td></tr>
+                <tr><td>Workflow orchestration</td><td><strong>Temporal</strong></td><td>Durable retries and visible multi-step processing state</td></tr>
+                <tr><td>Video encoding</td><td><strong>FFmpeg on Kubernetes</strong></td><td>Mature codec support and horizontally scalable jobs</td></tr>
+                <tr><td>Playback packaging</td><td><strong>HLS + MPEG-DASH</strong></td><td>Adaptive streaming across clients and ecosystems</td></tr>
+                <tr><td>Global delivery</td><td><strong>CloudFront</strong></td><td>Edge caching, signed cookies, and origin shielding</td></tr>
+                <tr><td>Metadata</td><td><strong>PostgreSQL + Cassandra</strong></td><td>Transactions for core state, scale for timelines</td></tr>
+                <tr><td>Search</td><td><strong>OpenSearch</strong></td><td>Full-text indexing, ranking, and filters</td></tr>
+                <tr><td>View aggregation</td><td><strong>Apache Flink</strong></td><td>Event-time processing, deduplication, and windows</td></tr>
+              </tbody>
+            </table>
+            <p>
+              These are example implementations, not mandatory dependencies.
+              Managed transcoding can replace FFmpeg workers at smaller scale,
+              and a single PostgreSQL database can handle metadata until access
+              patterns justify Cassandra. Complexity should follow measured load.
+            </p>
+          </section>
+
+          <section id="operations">
+            <span class="section-number">11 / PRODUCTION</span>
+            <h2>Measure viewer experience end to end</h2>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Media pipeline</h3>
+                <ul>
+                  <li>Upload completion and checksum failures</li>
+                  <li>Queue age and time to first playable rendition</li>
+                  <li>Encoding failures by codec and profile</li>
+                  <li>Source-to-output duration and cost</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Playback quality</h3>
+                <ul>
+                  <li>Time to first frame</li>
+                  <li>Rebuffer ratio and playback failures</li>
+                  <li>Average delivered bitrate</li>
+                  <li>CDN hit ratio and origin egress</li>
+                </ul>
+              </div>
+            </div>
+            <p>
+              Instrument clients with session-level quality-of-experience events
+              and aggregate them by device, ISP, region, CDN, and player version.
+              Server health can look perfect while one ISP or television client
+              produces a poor viewing experience.
+            </p>
+            <h3>Final design summary</h3>
+            <p>
+              Clients upload directly to S3 in resumable parts. Kafka and Temporal
+              coordinate idempotent FFmpeg jobs that create HLS and DASH
+              renditions. CloudFront serves immutable segments near viewers.
+              PostgreSQL, Cassandra, Redis, and OpenSearch handle distinct
+              metadata access patterns, while Flink aggregates high-volume
+              playback events. The architecture scales because large video bytes
+              bypass application servers on both upload and playback.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>

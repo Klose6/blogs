@@ -69,11 +69,11 @@
       text-transform: uppercase;
     }
     h1 {
-      max-width: 760px;
+      max-width: none;
       margin: 0 0 24px;
-      font: 700 clamp(3.4rem, 8vw, 6.5rem)/0.94 var(--serif);
+      font: 700 clamp(2.5rem, 5.3vw, 3.3rem)/0.94 var(--serif);
       letter-spacing: -0.055em;
-      text-wrap: balance;
+      white-space: nowrap;
     }
     .intro p:last-child {
       max-width: 620px;
@@ -115,8 +115,9 @@
     }
     h2 {
       margin: -6px 0 8px;
-      font: 700 clamp(1.75rem, 4vw, 2.55rem)/1.1 var(--serif);
+      font: 700 clamp(1.4rem, 2.7vw, 1.85rem)/1.1 var(--serif);
       letter-spacing: -0.035em;
+      white-space: nowrap;
     }
     .article p {
       max-width: 590px;
@@ -155,7 +156,8 @@
     @media (max-width: 620px) {
       .page { width: min(100% - 24px, 960px); }
       .intro { padding: 58px 0 52px; }
-      h1 { font-size: 3.4rem; }
+      h1 { font-size: 3.4rem; white-space: normal; }
+      h2 { white-space: normal; }
       .article { grid-template-columns: 1fr 22px; gap: 10px; }
       .article time { grid-column: 1 / -1; }
       footer { display: block; }
@@ -181,6 +183,23 @@
 
       <section class="articles" aria-labelledby="latest">
         <h2 class="section-title" id="latest">Latest articles</h2>
+
+        <a class="article" href="designing-youtube.html">
+          <time datetime="2026-09-13">September 13, 2026</time>
+          <div>
+            <h2>Designing YouTube</h2>
+            <p>
+              A global video platform design covering resumable uploads,
+              transcoding pipelines, adaptive streaming, and CDN delivery.
+            </p>
+            <div class="tags">
+              <span class="tag">System design</span>
+              <span class="tag">Video streaming</span>
+              <span class="tag">CDN</span>
+            </div>
+          </div>
+          <span class="arrow" aria-hidden="true">→</span>
+        </a>
 
         <a class="article" href="distributed-unique-id-generator.html">
           <time datetime="2026-09-13">September 13, 2026</time>
