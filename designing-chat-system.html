@@ -337,21 +337,65 @@ server → client
             <span class="section-number">04 / HIGH LEVEL</span>
             <h2>Separate connection, ordering, and storage</h2>
             <div class="diagram" role="img" aria-label="Chat system architecture">
-              <div class="flow">
-                <div class="node">Client</div>
-                <span class="arrow">↔</span>
-                <div class="node accent">WebSocket gateway</div>
-                <span class="arrow">→</span>
-                <div class="node green">Chat API</div>
-                <span class="arrow">→</span>
-                <div class="node purple">Kafka</div>
-                <span class="arrow">→</span>
-                <div class="node">Cassandra</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Fan-out</div>
-              </div>
+              <svg viewBox="0 0 1000 440" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="chat-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <path d="M145 95 H190" fill="none" stroke="#65716a" stroke-width="2"
+                  marker-start="url(#chat-arrow)" marker-end="url(#chat-arrow)"/>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#chat-arrow)">
+                  <path d="M330 95 H375"/>
+                  <path d="M495 95 H540"/>
+                  <path d="M660 85 H720"/>
+                  <path d="M600 130 V190 H720"/>
+                  <path d="M790 260 V315"/>
+                  <path d="M245 130 V260"/>
+                  <path d="M720 225 H650 V165 H260 V130"/>
+                  <path d="M435 260 V130"/>
+                  <path d="M85 130 V350 H540"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#chat-arrow)">
+                  <path d="M720 225 H650 V280 H305"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="60" width="120" height="70" rx="11"/>
+                  <rect x="190" y="60" width="140" height="70" rx="11" stroke="#3369a5"/>
+                  <rect x="375" y="60" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="540" y="60" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="720" y="50" width="140" height="70" rx="11"/>
+                  <rect x="720" y="190" width="140" height="70" rx="11" stroke="#3369a5"/>
+                  <rect x="185" y="260" width="120" height="70" rx="11"/>
+                  <rect x="375" y="260" width="120" height="70" rx="11"/>
+                  <rect x="540" y="315" width="120" height="70" rx="11"/>
+                  <rect x="720" y="315" width="140" height="70" rx="11" stroke="#74519b"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="101">Clients</text>
+                  <text x="260" y="91" fill="#234b78">WebSocket</text>
+                  <text x="260" y="109" fill="#234b78">gateways</text>
+                  <text x="435" y="101" fill="#176b55">Chat API</text>
+                  <text x="600" y="101" fill="#74519b">Kafka</text>
+                  <text x="790" y="91">Cassandra</text>
+                  <text x="790" y="109">history</text>
+                  <text x="790" y="231" fill="#234b78">Fan-out</text>
+                  <text x="245" y="301">Redis sessions</text>
+                  <text x="435" y="286">PostgreSQL</text>
+                  <text x="435" y="304">membership</text>
+                  <text x="600" y="356">S3 attachments</text>
+                  <text x="790" y="346" fill="#74519b">APNs + FCM</text>
+                  <text x="790" y="364" fill="#74519b">offline push</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="690" y="165">ordered events branch</text>
+                  <text x="485" y="245">authorization</text>
+                  <text x="485" y="420">durable messages, live delivery, and offline wake-up are separate paths</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                Redis tracks live sessions; PostgreSQL stores conversations and membership.
+                Kafka branches committed events into durable history and fan-out;
+                gateways consult Redis while the API authorizes against PostgreSQL.
               </p>
             </div>
             <div class="grid-2">

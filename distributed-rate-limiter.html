@@ -560,19 +560,54 @@
             <span class="section-number">03 / HIGH LEVEL</span>
             <h2>Put enforcement close to traffic</h2>
             <div class="diagram" role="img" aria-label="Distributed rate limiter architecture">
-              <div class="flow">
-                <div class="node">Client</div>
-                <span class="arrow">→</span>
-                <div class="node blue">Envoy Gateway</div>
-                <span class="arrow">→</span>
-                <div class="node green">Go gRPC limiter</div>
-                <span class="arrow">↔</span>
-                <div class="node">Redis Cluster</div>
-                <span class="arrow">←</span>
-                <div class="node blue">Policy API</div>
-              </div>
+              <svg viewBox="0 0 920 390" style="display:block;width:100%;min-width:680px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="rate-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#rate-arrow)">
+                  <path d="M145 95 H205"/>
+                  <path d="M335 95 H400"/>
+                  <path d="M270 130 V245"/>
+                  <path d="M665 280 H730"/>
+                </g>
+                <path d="M335 280 H405" fill="none" stroke="#65716a" stroke-width="2"
+                  marker-start="url(#rate-arrow)" marker-end="url(#rate-arrow)"/>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#rate-arrow)">
+                  <path d="M600 245 V190 H335 V255"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="60" width="120" height="70" rx="11"/>
+                  <rect x="205" y="60" width="130" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="400" y="60" width="140" height="70" rx="11"/>
+                  <rect x="205" y="245" width="130" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="405" y="245" width="120" height="70" rx="11"/>
+                  <rect x="555" y="245" width="110" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="730" y="245" width="140" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="100">Client</text>
+                  <text x="270" y="91" fill="#285f8f">Envoy</text>
+                  <text x="270" y="109" fill="#285f8f">Gateway</text>
+                  <text x="470" y="100">Upstream API</text>
+                  <text x="270" y="276" fill="#176b55">Go gRPC</text>
+                  <text x="270" y="294" fill="#176b55">limiter</text>
+                  <text x="465" y="285">Redis Cluster</text>
+                  <text x="610" y="285" fill="#285f8f">Policy API</text>
+                  <text x="800" y="276">PostgreSQL</text>
+                  <text x="800" y="294">policies</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="365" y="82">allowed</text>
+                  <text x="350" y="184">check every request</text>
+                  <text x="465" y="340">token state</text>
+                  <text x="475" y="180">cached policy updates</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                PostgreSQL stores policy definitions outside the request decision path.
+                The request path branches at Envoy: allowed traffic reaches the
+                upstream API, while quota checks use the data plane below it.
               </p>
             </div>
             <div class="grid-2">

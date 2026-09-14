@@ -361,19 +361,58 @@
             <span class="section-number">04 / HIGH LEVEL</span>
             <h2>Keep coordination off the hot path</h2>
             <div class="diagram" role="img" aria-label="Distributed ID generator architecture">
-              <div class="flow">
-                <div class="node">Application</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Go ID library</div>
-                <span class="arrow">→</span>
-                <div class="node green">Local ID</div>
-                <span class="arrow">→</span>
-                <div class="node">Database</div>
-                <span class="arrow">· · ·</span>
-                <div class="node accent">etcd leases</div>
-              </div>
+              <svg viewBox="0 0 920 390" style="display:block;width:100%;min-width:680px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="id-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#id-arrow)">
+                  <path d="M160 105 H240"/>
+                  <path d="M370 105 H450"/>
+                  <path d="M570 105 H670"/>
+                  <path d="M160 295 H240"/>
+                  <path d="M370 295 H510 V140"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#id-arrow)">
+                  <path d="M495 260 V195 H305 V140"/>
+                  <path d="M685 260 V175 H345 V140"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="30" y="70" width="130" height="70" rx="11"/>
+                  <rect x="240" y="70" width="130" height="70" rx="11" stroke="#7a4fa3"/>
+                  <rect x="450" y="70" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="670" y="70" width="150" height="70" rx="11"/>
+                  <rect x="240" y="260" width="130" height="70" rx="11" stroke="#7a4fa3"/>
+                  <rect x="430" y="260" width="130" height="70" rx="11"/>
+                  <rect x="620" y="260" width="130" height="70" rx="11"/>
+                  <rect x="30" y="260" width="130" height="70" rx="11" stroke="#285f8f"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="95" y="101">Application</text>
+                  <text x="95" y="119">processes</text>
+                  <text x="305" y="101" fill="#533274">Go ID</text>
+                  <text x="305" y="119" fill="#533274">library</text>
+                  <text x="510" y="101" fill="#176b55">Local IDs</text>
+                  <text x="745" y="101">Databases +</text>
+                  <text x="745" y="119">event streams</text>
+                  <text x="305" y="292" fill="#533274">gRPC generator</text>
+                  <text x="305" y="310" fill="#533274">service</text>
+                  <text x="495" y="301">etcd leases</text>
+                  <text x="685" y="292">chrony +</text>
+                  <text x="685" y="310">host clock</text>
+                  <text x="95" y="292" fill="#285f8f">gRPC clients</text>
+                  <text x="95" y="310" fill="#285f8f">compatibility</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="430" y="215">compatibility path</text>
+                  <text x="495" y="190">worker lease + clock inputs</text>
+                  <text x="490" y="360">monitoring reads every component; generation stays local</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                etcd assigns worker IDs at startup; it is not called for each generated ID.
+                etcd and chrony support the generator from side paths; neither
+                adds a network call to normal in-process ID generation.
               </p>
             </div>
             <p>

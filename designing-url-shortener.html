@@ -345,21 +345,70 @@ until PutIfAbsent(code, mapping) succeeds</pre>
             <span class="section-number">04 / HIGH LEVEL</span>
             <h2>Separate creation from redirection</h2>
             <div class="diagram" role="img" aria-label="URL shortener architecture">
-              <div class="flow">
-                <div class="node">Browser</div>
-                <span class="arrow">→</span>
-                <div class="node blue">Cloudflare</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Go redirect API</div>
-                <span class="arrow">→</span>
-                <div class="node green">Redis</div>
-                <span class="arrow">→</span>
-                <div class="node">DynamoDB</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Kafka</div>
-              </div>
+              <svg viewBox="0 0 1000 470" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="url-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#url-arrow)">
+                  <path d="M140 85 H180"/>
+                  <path d="M300 85 H340"/>
+                  <path d="M470 85 H540"/>
+                  <path d="M405 120 V190"/>
+                  <path d="M465 225 H520"/>
+                  <path d="M640 225 H695"/>
+                  <path d="M405 260 V350"/>
+                  <path d="M465 385 H520"/>
+                  <path d="M640 385 H695"/>
+                  <path d="M580 420 V440 H895 V420"/>
+                  <path d="M140 225 H180"/>
+                  <path d="M300 225 V300 H760 V260"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="20" y="50" width="120" height="70" rx="11"/>
+                  <rect x="180" y="50" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="340" y="50" width="130" height="70" rx="11" stroke="#167c80"/>
+                  <rect x="540" y="50" width="140" height="70" rx="11"/>
+                  <rect x="345" y="190" width="120" height="70" rx="11"/>
+                  <rect x="520" y="190" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="695" y="190" width="130" height="70" rx="11"/>
+                  <rect x="20" y="190" width="120" height="70" rx="11" stroke="#167c80"/>
+                  <rect x="180" y="190" width="120" height="70" rx="11"/>
+                  <rect x="345" y="350" width="120" height="70" rx="11" stroke="#167c80"/>
+                  <rect x="520" y="350" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="695" y="350" width="130" height="70" rx="11"/>
+                  <rect x="825" y="350" width="140" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="80" y="91">Browser</text>
+                  <text x="240" y="91" fill="#285f8f">Cloudflare</text>
+                  <text x="405" y="81" fill="#0d585b">Go redirect</text>
+                  <text x="405" y="99" fill="#0d585b">service</text>
+                  <text x="610" y="81">Destination</text>
+                  <text x="610" y="99">website</text>
+                  <text x="405" y="231">Local cache</text>
+                  <text x="580" y="231" fill="#176b55">Redis</text>
+                  <text x="760" y="231">DynamoDB</text>
+                  <text x="80" y="216" fill="#0d585b">Create API</text>
+                  <text x="80" y="234" fill="#0d585b">clients</text>
+                  <text x="240" y="216">Validation +</text>
+                  <text x="240" y="234">safety scan</text>
+                  <text x="405" y="391" fill="#0d585b">Kafka</text>
+                  <text x="580" y="391" fill="#176b55">Apache Flink</text>
+                  <text x="760" y="391">ClickHouse</text>
+                  <text x="895" y="382">S3 + Parquet</text>
+                  <text x="895" y="400">raw events</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="565" y="170">fallback lookup chain</text>
+                  <text x="570" y="330">asynchronous analytics</text>
+                  <text x="490" y="450">creation, redirect, and analytics are independently scalable branches</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                The creation API writes DynamoDB; redirect events flow asynchronously to Kafka.
+                Redirects branch into layered lookups and asynchronous analytics,
+                while creation reaches the mapping store through a separate safety path.
               </p>
             </div>
             <div class="grid-2">

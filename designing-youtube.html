@@ -300,21 +300,66 @@
             <span class="section-number">03 / HIGH LEVEL</span>
             <h2>Split control plane from media plane</h2>
             <div class="diagram" role="img" aria-label="YouTube high-level architecture">
-              <div class="flow">
-                <div class="node">Client</div>
-                <span class="arrow">→</span>
-                <div class="node accent">API services</div>
-                <span class="arrow">→</span>
-                <div class="node">Kafka</div>
-                <span class="arrow">→</span>
-                <div class="node green">Transcoders</div>
-                <span class="arrow">→</span>
-                <div class="node">S3 media</div>
-                <span class="arrow">→</span>
-                <div class="node blue">CDN</div>
-              </div>
+              <svg viewBox="0 0 1000 430" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="video-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#video-arrow)">
+                  <path d="M145 95 H190"/>
+                  <path d="M310 85 H370"/>
+                  <path d="M310 105 H340 V200 H370"/>
+                  <path d="M80 130 V325 H370"/>
+                  <path d="M490 200 H535"/>
+                  <path d="M655 200 H700"/>
+                  <path d="M760 235 V260 H430 V290"/>
+                  <path d="M490 325 H700"/>
+                  <path d="M820 325 H860"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#video-arrow)">
+                  <path d="M310 75 H535"/>
+                  <path d="M920 290 V20 H250 V60"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="60" width="120" height="70" rx="11"/>
+                  <rect x="190" y="60" width="120" height="70" rx="11" stroke="#d74732"/>
+                  <rect x="370" y="35" width="120" height="70" rx="11"/>
+                  <rect x="535" y="35" width="120" height="70" rx="11"/>
+                  <rect x="370" y="165" width="120" height="70" rx="11"/>
+                  <rect x="535" y="165" width="120" height="70" rx="11" stroke="#d74732"/>
+                  <rect x="700" y="165" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="370" y="290" width="120" height="70" rx="11"/>
+                  <rect x="700" y="290" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="860" y="290" width="120" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="91">Creator /</text>
+                  <text x="85" y="109">viewer</text>
+                  <text x="250" y="101" fill="#9d2818">API services</text>
+                  <text x="430" y="76">PostgreSQL</text>
+                  <text x="595" y="76">OpenSearch</text>
+                  <text x="430" y="206">Kafka</text>
+                  <text x="595" y="191" fill="#9d2818">Temporal</text>
+                  <text x="595" y="209" fill="#9d2818">workflows</text>
+                  <text x="760" y="191" fill="#176b55">FFmpeg</text>
+                  <text x="760" y="209" fill="#176b55">workers</text>
+                  <text x="430" y="316">S3 source +</text>
+                  <text x="430" y="334">renditions</text>
+                  <text x="760" y="316" fill="#285f8f">CloudFront</text>
+                  <text x="760" y="334" fill="#285f8f">CDN</text>
+                  <text x="920" y="316">Playback</text>
+                  <text x="920" y="334">clients</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="215" y="320">direct multipart upload</text>
+                  <text x="595" y="320">encoded segments</text>
+                  <text x="615" y="397">media plane</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                PostgreSQL and Cassandra store metadata; OpenSearch powers discovery.
+                API calls branch into metadata, search, and workflow systems;
+                large video bytes travel directly between clients, S3, workers, and the CDN.
               </p>
             </div>
             <div class="grid-2">

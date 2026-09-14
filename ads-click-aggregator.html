@@ -452,21 +452,58 @@
             <span class="section-number">03 / HIGH LEVEL</span>
             <h2>Separate ingest, compute, and serve</h2>
             <div class="diagram" role="img" aria-label="Click aggregation architecture">
-              <div class="flow">
-                <div class="node">Ad client</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Ingest API</div>
-                <span class="arrow">→</span>
-                <div class="node">Kafka</div>
-                <span class="arrow">→</span>
-                <div class="node green">Apache Flink</div>
-                <span class="arrow">→</span>
-                <div class="node">ClickHouse</div>
-                <span class="arrow">→</span>
-                <div class="node accent">Query API</div>
-              </div>
+              <svg viewBox="0 0 920 390" style="display:block;width:100%;min-width:680px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="ads-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#ads-arrow)">
+                  <path d="M140 105 H175"/>
+                  <path d="M295 105 H330"/>
+                  <path d="M450 105 H485"/>
+                  <path d="M605 105 H640"/>
+                  <path d="M760 105 H795"/>
+                  <path d="M390 140 V255"/>
+                  <path d="M450 290 H510"/>
+                  <path d="M630 290 H690 V140"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#ads-arrow)">
+                  <path d="M170 290 H210 V140"/>
+                  <path d="M230 255 V205 H545 V140"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="20" y="70" width="120" height="70" rx="11"/>
+                  <rect x="175" y="70" width="120" height="70" rx="11" stroke="#e85d3f"/>
+                  <rect x="330" y="70" width="120" height="70" rx="11"/>
+                  <rect x="485" y="70" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="640" y="70" width="120" height="70" rx="11"/>
+                  <rect x="795" y="70" width="105" height="70" rx="11" stroke="#e85d3f"/>
+                  <rect x="330" y="255" width="120" height="70" rx="11"/>
+                  <rect x="510" y="255" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="50" y="255" width="120" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter, sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="80" y="110">Ad clients</text>
+                  <text x="235" y="110" fill="#a9321d">Ingest API</text>
+                  <text x="390" y="110">Kafka</text>
+                  <text x="545" y="110" fill="#176b55">Apache Flink</text>
+                  <text x="700" y="110">ClickHouse</text>
+                  <text x="848" y="110" fill="#a9321d">Query API</text>
+                  <text x="390" y="296">S3 + Parquet</text>
+                  <text x="570" y="287" fill="#176b55">Batch</text>
+                  <text x="570" y="305" fill="#176b55">reconciliation</text>
+                  <text x="110" y="287">PostgreSQL</text>
+                  <text x="110" y="305">campaigns</text>
+                </g>
+                <g fill="#65716a" font-family="Inter, sans-serif" font-size="12" text-anchor="middle">
+                  <text x="390" y="350">immutable truth path</text>
+                  <text x="235" y="225">metadata and policy</text>
+                </g>
+              </svg>
               <p class="diagram-caption">
-                Raw events also flow from Kafka into immutable Amazon S3 storage.
+                Kafka branches into a live Flink path and an immutable S3 truth path;
+                reconciliation later corrects the same ClickHouse serving tables.
               </p>
             </div>
             <div class="grid-2">
