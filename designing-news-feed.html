@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a scalable personalized news feed.">
+  <title>Designing a News Feed</title>
+  <style>
+    :root {
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#b45d18;--accent-dark:#794010;
+      --green:#176b55;--blue:#285f8f;--purple:#74519b;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif;
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(180,93,24,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--green);
+      content:"";box-shadow:0 0 0 4px rgba(23,107,85,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px} ul,ol{padding-left:1.25rem} li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)} .grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--green);font-weight:700}.warn{color:#a9321d;font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a News Feed</h1>
+          <div class="meta">
+            <span class="pill">Hybrid fan-out</span>
+            <span class="pill">Ranking</span>
+            <span class="pill">Caching</span>
+            <span class="pill">14 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we publish a post once and deliver a relevant, fresh feed to
+          millions of followers? The design combines materialized inboxes for
+          fast reads with on-demand merging for high-fan-out creators.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#strategies">Fan-out strategies</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#publish">Publish path</a>
+            <a href="#read">Feed read path</a>
+            <a href="#ranking">Ranking</a>
+            <a href="#pagination">Pagination</a>
+            <a href="#correctness">Privacy and changes</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Build a personalized following feed</h2>
+            <p>
+              Users publish text, images, and videos; follow other users; and
+              browse a ranked feed. They can like, comment on, hide, or delete
+              posts. This design covers the following feed. Recommendation model
+              training and advertising auctions are adjacent systems.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Create, edit, delete, and retrieve posts</li>
+                  <li>Follow and unfollow creators</li>
+                  <li>Return a ranked, paginated home feed</li>
+                  <li>Capture likes, comments, hides, and views</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>Feed response below 300 ms at p99</li>
+                  <li>New normal-author posts visible within seconds</li>
+                  <li>No single celebrity can overload fan-out</li>
+                  <li>Deleted or private content disappears quickly</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Consistency priority:</strong> ranking and counters can be
+              eventually consistent. Access control cannot. Every read performs
+              a final visibility check even if a stale feed candidate remains.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Fan-out creates the real write load</h2>
+            <p>
+              Assume 100 million daily users, 500 million posts and 2 billion feed
+              reads per day, a 5× peak multiplier, and 200 followers per creator
+              on average.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">5.8k/s</div>
+                <h3>average posts</h3>
+                <p>About 29k/s at peak.</p>
+              </div>
+              <div class="card">
+                <div class="metric">23k/s</div>
+                <h3>average feed reads</h3>
+                <p>About 116k/s at peak.</p>
+              </div>
+              <div class="card">
+                <div class="metric">1.16M/s</div>
+                <h3>inbox insertions</h3>
+                <p>If every post fans out to 200 followers.</p>
+              </div>
+            </div>
+            <p>
+              Follower counts are highly skewed, so averages hide the dangerous
+              case. A creator with 100 million followers cannot synchronously
+              materialize 100 million inbox entries for every post.
+            </p>
+          </section>
+
+          <section id="strategies">
+            <span class="section-number">03 / FAN-OUT</span>
+            <h2>Combine fan-out on write and read</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Strategy</th><th>How it works</th><th>Trade-off</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Fan-out on write</strong></td>
+                  <td>Insert the post ID into each follower's inbox at publish time</td>
+                  <td>Very fast reads, but expensive for celebrity authors</td>
+                </tr>
+                <tr>
+                  <td><strong>Fan-out on read</strong></td>
+                  <td>Fetch recent posts from every followed author when the feed opens</td>
+                  <td>Cheap publishing, but slow reads and many scatter queries</td>
+                </tr>
+                <tr>
+                  <td><strong>Hybrid</strong></td>
+                  <td>Push normal authors; merge celebrity posts during reads</td>
+                  <td>More logic, but controls both read latency and write explosions</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Use fan-out on write below a configurable follower threshold, such
+              as 100,000. Mark larger accounts as pull authors. The read service
+              merges their recent posts with the user's materialized inbox before
+              ranking. Measure fan-out cost and adjust the threshold dynamically.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Branch publishing from feed serving</h2>
+            <div class="diagram" role="img" aria-label="News feed architecture">
+              <svg viewBox="0 0 1000 470" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="feed-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#feed-arrow)">
+                  <path d="M145 90H190"/>
+                  <path d="M310 90H370"/>
+                  <path d="M490 90H540"/>
+                  <path d="M600 125V160H430V190"/>
+                  <path d="M490 225H540"/>
+                  <path d="M600 125V150H780V190"/>
+                  <path d="M145 340H190"/>
+                  <path d="M310 340H370"/>
+                  <path d="M490 340H540"/>
+                  <path d="M720 340H660"/>
+                  <path d="M600 260V280H430V305"/>
+                  <path d="M780 260V280H470V305"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#feed-arrow)">
+                  <path d="M840 125V170H470V190"/>
+                  <path d="M840 125V305H780"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="190" y="55" width="120" height="70" rx="11" stroke="#b45d18"/>
+                  <rect x="370" y="55" width="120" height="70" rx="11"/>
+                  <rect x="540" y="55" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="780" y="55" width="120" height="70" rx="11"/>
+                  <rect x="370" y="190" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="540" y="190" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="720" y="190" width="120" height="70" rx="11"/>
+                  <rect x="25" y="305" width="120" height="70" rx="11"/>
+                  <rect x="190" y="305" width="120" height="70" rx="11" stroke="#b45d18"/>
+                  <rect x="370" y="305" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="540" y="305" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="720" y="305" width="120" height="70" rx="11" stroke="#176b55"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Creator</text>
+                  <text x="250" y="81" fill="#794010">Post API</text>
+                  <text x="250" y="99" fill="#794010">+ outbox</text>
+                  <text x="430" y="96">Post store</text>
+                  <text x="600" y="96" fill="#74519b">Kafka</text>
+                  <text x="840" y="81">Social graph</text>
+                  <text x="840" y="99">store</text>
+                  <text x="430" y="216" fill="#176b55">Fan-out</text>
+                  <text x="430" y="234" fill="#176b55">workers</text>
+                  <text x="600" y="216" fill="#176b55">Inbox store</text>
+                  <text x="600" y="234" fill="#176b55">+ Redis</text>
+                  <text x="780" y="216">Celebrity</text>
+                  <text x="780" y="234">recent posts</text>
+                  <text x="85" y="346">Reader</text>
+                  <text x="250" y="346" fill="#794010">Feed API</text>
+                  <text x="430" y="331" fill="#285f8f">Candidate</text>
+                  <text x="430" y="349" fill="#285f8f">merge</text>
+                  <text x="600" y="346" fill="#74519b">Ranker</text>
+                  <text x="780" y="331" fill="#176b55">Feature</text>
+                  <text x="780" y="349" fill="#176b55">store</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="590" y="440">publish, materialization, candidate retrieval, and ranking scale independently</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Kafka branches new posts into asynchronous fan-out; feed reads
+                merge materialized inboxes with celebrity posts before ranking.
+              </p>
+            </div>
+          </section>
+
+          <section id="publish">
+            <span class="section-number">05 / PUBLISHING</span>
+            <h2>Commit the post before distributing it</h2>
+            <pre>POST /v1/posts
+Idempotency-Key: 0199f2d1-...
+{
+  "text": "A new system design note",
+  "media_ids": ["media_842"],
+  "visibility": "followers"
+}</pre>
+            <ol class="steps">
+              <li>
+                <strong>Validate.</strong> Authenticate the author, rate-limit,
+                scan text, and verify uploaded media ownership.
+              </li>
+              <li>
+                <strong>Commit atomically.</strong> Write the post and an outbox
+                event in one PostgreSQL transaction.
+              </li>
+              <li>
+                <strong>Publish the event.</strong> A connector sends the outbox
+                row to Kafka, keyed by author ID.
+              </li>
+              <li>
+                <strong>Choose fan-out mode.</strong> Workers read follower pages
+                for normal authors or update the celebrity recent-post list.
+              </li>
+              <li>
+                <strong>Materialize.</strong> Batch inbox inserts and warm Redis
+                for active followers; retry failed pages idempotently.
+              </li>
+            </ol>
+            <p>
+              The API returns after the post and outbox commit, not after fan-out.
+              Each inbox key contains <code>(user_id, post_id)</code>, making
+              worker retries safe. Publish progress is checkpointed by follower
+              page so a worker crash does not restart a massive distribution.
+            </p>
+          </section>
+
+          <section id="read">
+            <span class="section-number">06 / SERVING</span>
+            <h2>Generate more candidates than the page needs</h2>
+            <ol class="steps">
+              <li>
+                Read a few hundred recent post IDs from the user's Redis inbox,
+                falling back to Cassandra on a miss.
+              </li>
+              <li>
+                Fetch recent posts from followed celebrity authors in parallel.
+              </li>
+              <li>
+                Merge and deduplicate IDs, then remove blocked, deleted, expired,
+                already-seen, or unauthorized candidates.
+              </li>
+              <li>
+                Batch-fetch post bodies and ranking features.
+              </li>
+              <li>
+                Score candidates, apply diversity rules, and return the top page
+                with an opaque continuation cursor.
+              </li>
+            </ol>
+            <p>
+              Cache post objects separately from user-specific feed results. Post
+              objects have high reuse, while a fully ranked feed is personalized
+              and becomes stale quickly. A short session cache can stabilize the
+              next few pages for one reader.
+            </p>
+            <div class="callout">
+              <strong>Graceful degradation:</strong> if ranking is unavailable,
+              return valid candidates in reverse chronological order. If Redis is
+              unavailable, read a smaller page from Cassandra. The feed can lose
+              personalization before it loses availability.
+            </div>
+          </section>
+
+          <section id="ranking">
+            <span class="section-number">07 / RELEVANCE</span>
+            <h2>Separate retrieval from ranking</h2>
+            <p>
+              Candidate retrieval answers “what could this user see?” Ranking
+              answers “what should appear first?” Keeping them separate allows
+              fast rules-based fallback and independent model deployment.
+            </p>
+            <pre>score = model(
+  viewer_author_affinity,
+  predicted_like_probability,
+  predicted_comment_probability,
+  freshness,
+  post_quality,
+  negative_feedback_probability
+)
+
+final = diversity_and_policy_rules(score)</pre>
+            <p>
+              Online features—recent clicks, hides, and author interactions—live
+              in Redis or a dedicated feature store. Durable events flow through
+              Kafka and Flink into offline Parquet datasets for training and into
+              the online store for serving. Every model and feature set is
+              versioned so ranking decisions are reproducible.
+            </p>
+            <p>
+              After scoring, apply hard policy filters, author and topic diversity,
+              frequency caps, and exploration. A high model score never overrides
+              privacy, blocks, moderation, or legal restrictions.
+            </p>
+          </section>
+
+          <section id="pagination">
+            <span class="section-number">08 / CURSORS</span>
+            <h2>Avoid offset pagination</h2>
+            <p>
+              <code>OFFSET 100</code> is slow and unstable while new posts arrive.
+              Return an opaque, signed cursor containing a feed-session ID,
+              candidate watermark, last score, last post ID, and expiry.
+            </p>
+            <pre>{
+  "items": [...],
+  "next_cursor": "base64url(signed_session_state)",
+  "generated_at": "2026-09-14T23:55:00Z"
+}</pre>
+            <p>
+              The short-lived feed session stores a candidate snapshot or its
+              seed and model version. This prevents severe reshuffling between
+              pages. Clients still deduplicate by post ID because edits, deletes,
+              retries, and session expiration can change results.
+            </p>
+          </section>
+
+          <section id="correctness">
+            <span class="section-number">09 / CHANGES</span>
+            <h2>Filter stale candidates at read time</h2>
+            <p>
+              Materialized inboxes intentionally contain references, not copies
+              of post content. When a post is edited, the latest object appears
+              automatically. Deletes and privacy changes write authoritative
+              tombstones immediately and publish cleanup events.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Change</th><th>Immediate action</th><th>Async cleanup</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Post deleted</td><td>Tombstone post and purge object cache</td><td>Remove inbox references</td></tr>
+                <tr><td>User unfollows</td><td>Filter author during feed read</td><td>Remove old inbox entries</td></tr>
+                <tr><td>User blocks author</td><td>Update deny cache globally</td><td>Clean feeds and notifications</td></tr>
+                <tr><td>Post becomes private</td><td>Require authoritative access check</td><td>Invalidate cached candidates</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Store a social-graph version with generated feed pages. If the
+              viewer's block or membership version changes, discard the cached
+              page. This prevents a long cache TTL from weakening access control.
+            </p>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">10 / MULTI-REGION</span>
+            <h2>Write users at home, serve feeds locally</h2>
+            <p>
+              Assign each user a home region for post and social-graph writes.
+              Replicate post events globally through Kafka cluster linking and
+              replicate durable stores asynchronously. Feed APIs run in every
+              region and read local inbox replicas and caches.
+            </p>
+            <p>
+              Fan-out occurs near the followers' inbox partitions rather than
+              only in the author's region. A distribution consumer receives the
+              post event, groups followers by home region, and publishes regional
+              fan-out tasks. This avoids millions of individual cross-region writes.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Regional outage</h3>
+                <p>
+                  Route readers to another region and rebuild missing inbox pages
+                  from followed authors. New writes pause or use a fenced home-region failover.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Replication lag</h3>
+                <p>
+                  A new remote post may appear seconds late. Preserve session
+                  consistency by reading the author's recent-post fallback when needed.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">11 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Post and feed APIs</td><td><strong>Go + gRPC/HTTP</strong></td><td>Efficient fan-out workers and low-latency serving</td></tr>
+                <tr><td>Posts and outbox</td><td><strong>PostgreSQL</strong></td><td>Atomic post creation and event publication intent</td></tr>
+                <tr><td>Event transport</td><td><strong>Apache Kafka</strong></td><td>Replayable post, graph, and engagement streams</td></tr>
+                <tr><td>Inbox and graph adjacency</td><td><strong>Apache Cassandra</strong></td><td>High write throughput and partition-key access</td></tr>
+                <tr><td>Hot feeds and features</td><td><strong>Redis Cluster</strong></td><td>Sorted sets, short-lived sessions, and low-latency features</td></tr>
+                <tr><td>Online ranking</td><td><strong>Python + Triton</strong></td><td>Versioned model inference with dynamic batching</td></tr>
+                <tr><td>Stream features</td><td><strong>Apache Flink</strong></td><td>Event-time engagement aggregation and feature updates</td></tr>
+                <tr><td>Media delivery</td><td><strong>S3 + CloudFront</strong></td><td>Direct upload, durable objects, and edge caching</td></tr>
+              </tbody>
+            </table>
+            <h3>Production signals</h3>
+            <ul>
+              <li>Post-to-feed freshness by author class and region</li>
+              <li>Fan-out queue age, throughput, retries, and celebrity classification</li>
+              <li>Candidate count before and after safety filters</li>
+              <li>Feed latency split by retrieval, hydration, and ranking</li>
+              <li>Redis hit rate and Cassandra partition size</li>
+              <li>Model timeout, fallback rate, and engagement quality</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              Commit posts and outbox events in PostgreSQL, then distribute them
+              through Kafka. Fan out normal authors into Cassandra and Redis
+              inboxes, while merging celebrity posts at read time. Retrieve more
+              candidates than needed, enforce current visibility, rank with
+              versioned features, and paginate through stable feed sessions.
+              Regional fan-out keeps writes local, and chronological fallback
+              preserves availability when personalization fails.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
