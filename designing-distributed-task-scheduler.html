@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a reliable distributed task scheduler.">
+  <title>Designing a Distributed Task Scheduler</title>
+  <style>
+    :root{
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#b04b68;--accent-dark:#793248;
+      --green:#176b55;--blue:#285f8f;--purple:#74519b;--orange:#b45d18;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(176,75,104,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--green);
+      content:"";box-shadow:0 0 0 4px rgba(23,107,85,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px}ul,ol{padding-left:1.25rem}li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--green);font-weight:700}.warn{color:#a9321d;font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a Distributed Task Scheduler</h1>
+          <div class="meta">
+            <span class="pill">Time buckets</span>
+            <span class="pill">Leases</span>
+            <span class="pill">At-least-once</span>
+            <span class="pill">15 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we run millions of one-time and recurring tasks close to their
+          deadlines without losing work or executing it uncontrollably twice?
+          The design separates durable scheduling from dispatch and execution.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#semantics">Delivery semantics</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#storage">Data model</a>
+            <a href="#scheduling">Scheduling loop</a>
+            <a href="#execution">Worker execution</a>
+            <a href="#recurring">Recurring tasks</a>
+            <a href="#failures">Retries and recovery</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Schedule durably, execute independently</h2>
+            <p>
+              Clients create one-time or cron schedules, cancel pending tasks,
+              inspect status, and configure retries. Workers execute registered
+              task types. This design is a scheduler, not a general workflow
+              engine: dependency graphs, human approvals, and long-lived sagas
+              should use a system such as Temporal.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>One-time, delayed, and recurring schedules</li>
+                  <li>Task cancellation and status inspection</li>
+                  <li>Priorities, retry policy, timeout, and dead letter</li>
+                  <li>Tenant quotas and task-type routing</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>No acknowledged schedule is silently lost</li>
+                  <li>99% dispatch within one second of due time</li>
+                  <li>At-least-once execution with bounded duplicates</li>
+                  <li>Horizontal scaling to billions of active schedules</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Critical distinction:</strong> dispatching on time and
+              finishing on time are different SLOs. The scheduler controls when
+              work becomes available; worker capacity and downstream latency
+              control completion.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Estimate active timers and due-task bursts</h2>
+            <p>
+              Assume one billion active schedules, 100 million executions per
+              day, a 10× burst at minute and hour boundaries, and a 2 KB task
+              record including indexes and retry metadata.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">1.16k/s</div>
+                <h3>average executions</h3>
+                <p>Plan for at least 12k/s burst dispatch.</p>
+              </div>
+              <div class="card">
+                <div class="metric">2 TB</div>
+                <h3>active schedule data</h3>
+                <p>Before replication and secondary indexes.</p>
+              </div>
+              <div class="card">
+                <div class="metric">1B</div>
+                <h3>active timers</h3>
+                <p>Too many for one process or one sorted set.</p>
+              </div>
+            </div>
+            <p>
+              Average throughput is modest compared with event systems, but time
+              distribution is adversarial. Customers naturally choose midnight,
+              the top of an hour, or a round minute. Add jitter where semantics
+              allow it and provision for synchronized bursts.
+            </p>
+          </section>
+
+          <section id="semantics">
+            <span class="section-number">03 / CONTRACT</span>
+            <h2>Promise at least once, require idempotency</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Guarantee</th><th>Reality</th><th>Decision</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>At most once</strong></td>
+                  <td>A crash after marking complete but before execution can lose work</td>
+                  <td>Wrong default for important tasks</td>
+                </tr>
+                <tr>
+                  <td><strong>At least once</strong></td>
+                  <td>Lease expiry and acknowledgement loss can cause a retry</td>
+                  <td>Chosen: no loss, but handlers must deduplicate</td>
+                </tr>
+                <tr>
+                  <td><strong>Exactly once</strong></td>
+                  <td>Cannot cover arbitrary external side effects atomically</td>
+                  <td>Achieve only per effect with idempotency or transactions</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Every execution carries a stable <code>execution_id</code>. A payment
+              handler passes it as the provider's idempotency key; a database
+              handler stores it in a unique column in the same transaction as its
+              business change. The scheduler never claims that a worker process
+              ran exactly once.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Separate storage, timing, and execution</h2>
+            <div class="diagram" role="img" aria-label="Distributed task scheduler architecture">
+              <svg viewBox="0 0 1000 480" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="scheduler-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#scheduler-arrow)">
+                  <path d="M145 90H190"/>
+                  <path d="M310 90H370"/>
+                  <path d="M430 125V190"/>
+                  <path d="M490 225H550"/>
+                  <path d="M670 225H730"/>
+                  <path d="M850 225H900"/>
+                  <path d="M945 260V290H790V325"/>
+                  <path d="M945 190V150H470V125"/>
+                  <path d="M550 360H490"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#scheduler-arrow)">
+                  <path d="M310 360H340V225H370"/>
+                  <path d="M490 105H520V360H550"/>
+                  <path d="M610 325V260"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="190" y="55" width="120" height="70" rx="11" stroke="#b04b68"/>
+                  <rect x="370" y="55" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="370" y="190" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="550" y="190" width="120" height="70" rx="11" stroke="#b45d18"/>
+                  <rect x="730" y="190" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="900" y="190" width="90" height="70" rx="11"/>
+                  <rect x="730" y="325" width="120" height="70" rx="11"/>
+                  <rect x="550" y="325" width="120" height="70" rx="11" stroke="#b04b68"/>
+                  <rect x="370" y="325" width="120" height="70" rx="11"/>
+                  <rect x="190" y="325" width="120" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Clients</text>
+                  <text x="250" y="81" fill="#793248">Schedule</text>
+                  <text x="250" y="99" fill="#793248">API</text>
+                  <text x="430" y="81" fill="#285f8f">DynamoDB</text>
+                  <text x="430" y="99" fill="#285f8f">task buckets</text>
+                  <text x="430" y="216" fill="#176b55">Scheduler</text>
+                  <text x="430" y="234" fill="#176b55">coordinators</text>
+                  <text x="610" y="216" fill="#b45d18">Outbox</text>
+                  <text x="610" y="234" fill="#b45d18">relay</text>
+                  <text x="790" y="231" fill="#74519b">Kafka</text>
+                  <text x="945" y="216">Worker</text>
+                  <text x="945" y="234">pools</text>
+                  <text x="790" y="351">External APIs</text>
+                  <text x="790" y="369">+ databases</text>
+                  <text x="610" y="351" fill="#793248">Lease reaper</text>
+                  <text x="610" y="369" fill="#793248">+ retry policy</text>
+                  <text x="430" y="351">Dead-letter</text>
+                  <text x="430" y="369">store</text>
+                  <text x="250" y="351">etcd shard</text>
+                  <text x="250" y="369">leases</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="555" y="155">durable timing path</text>
+                  <text x="700" y="455">status, retry, and dead-letter branches remain outside task execution</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Coordinators own time shards and create durable outbox records;
+                Kafka separates dispatch from worker capacity and retry recovery.
+              </p>
+            </div>
+          </section>
+
+          <section id="storage">
+            <span class="section-number">05 / DATA MODEL</span>
+            <h2>Partition schedules by time and shard</h2>
+            <pre>Task {
+  task_id:          string
+  tenant_id:        string
+  task_type:        string
+  payload_ref:      string
+  scheduled_at:     timestamp
+  bucket:           "2026-09-15T22:30#037"
+  status:           SCHEDULED | READY | RUNNING |
+                    SUCCEEDED | RETRY_WAIT | FAILED | CANCELLED
+  attempt:          integer
+  execution_id:     string
+  lease_until:      timestamp?
+  schedule_version: integer
+}</pre>
+            <p>
+              The DynamoDB partition key combines a one-minute UTC bucket with a
+              virtual shard, and the sort key is
+              <code>scheduled_at#task_id</code>. A coordinator queries only its
+              owned shards for the current horizon. Randomly assigning one of
+              hundreds of virtual shards prevents every midnight task from
+              creating one hot partition.
+            </p>
+            <p>
+              A task-ID index supports status and cancellation lookups. Large
+              payloads live in S3; the task stores an immutable object reference
+              and checksum. DynamoDB transactions update task state and create an
+              outbox item atomically.
+            </p>
+            <div class="callout">
+              <strong>Do not scan all tasks for “due now.”</strong> Time buckets
+              turn a global search into bounded range reads. Virtual shards spread
+              each bucket across storage partitions and coordinator instances.
+            </div>
+          </section>
+
+          <section id="scheduling">
+            <span class="section-number">06 / TIMING</span>
+            <h2>Use durable buckets plus an in-memory wheel</h2>
+            <ol class="steps">
+              <li>
+                <strong>Acquire virtual shards.</strong> Coordinators hold fenced
+                etcd leases and stop dispatching immediately if renewal fails.
+              </li>
+              <li>
+                <strong>Prefetch a short horizon.</strong> Query the next five
+                minutes of owned DynamoDB buckets and load tasks into a hierarchical
+                timing wheel.
+              </li>
+              <li>
+                <strong>Advance the wheel.</strong> A monotonic clock wakes slots
+                at 100 ms resolution; wall-clock UTC determines whether a task is due.
+              </li>
+              <li>
+                <strong>Claim conditionally.</strong> Transition
+                <code>SCHEDULED → READY</code> only if the schedule version and
+                state still match.
+              </li>
+              <li>
+                <strong>Create an outbox record.</strong> Commit it in the same
+                DynamoDB transaction, then let the relay publish to Kafka.
+              </li>
+            </ol>
+            <p>
+              The wheel is an optimization, not the source of truth. After restart,
+              a coordinator rebuilds it from DynamoDB. Query overlapping buckets
+              and keep a recovery scan behind the current time so a pause or lease
+              transfer cannot skip overdue tasks.
+            </p>
+            <h3>Why not one Redis sorted set?</h3>
+            <p>
+              A sorted set works at modest scale, but billions of timers create a
+              memory-heavy central structure, expensive failover, and hot range
+              queries around common deadlines. Durable time buckets provide
+              explicit partitioning; each coordinator keeps only its near-term
+              working set in memory.
+            </p>
+          </section>
+
+          <section id="execution">
+            <span class="section-number">07 / WORKERS</span>
+            <h2>Lease work before performing side effects</h2>
+            <ol class="steps">
+              <li>
+                A worker group consumes the Kafka topic for its task type and priority.
+              </li>
+              <li>
+                The worker conditionally transitions
+                <code>READY → RUNNING</code>, sets a unique execution token, and
+                records a lease deadline.
+              </li>
+              <li>
+                Long tasks heartbeat before the lease expires. The payload includes
+                the stable execution ID for downstream idempotency.
+              </li>
+              <li>
+                Success conditionally writes <code>SUCCEEDED</code> using the same
+                execution token, then acknowledges Kafka.
+              </li>
+              <li>
+                A stale worker whose lease was replaced cannot update status because
+                its execution token no longer matches.
+              </li>
+            </ol>
+            <p>
+              Do not hold a Kafka message unacknowledged for a six-hour task. The
+              durable task lease records ownership; the consumer can commit after
+              the claim. A lease reaper later detects abandoned RUNNING tasks and
+              creates a new attempt.
+            </p>
+            <pre>execution_id = task_id + ":" + occurrence + ":" + effect_name
+
+INSERT INTO sent_emails(execution_id, ...)
+VALUES (?, ...)
+ON CONFLICT (execution_id) DO NOTHING;</pre>
+          </section>
+
+          <section id="recurring">
+            <span class="section-number">08 / RECURRENCE</span>
+            <h2>Materialize recurring occurrences safely</h2>
+            <p>
+              Store the cron expression, IANA time zone, next occurrence, and a
+              misfire policy in a schedule record. Materialize only a small number
+              of future task occurrences. Each occurrence ID is deterministic:
+              <code>schedule_id + scheduled_utc_time</code>.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Misfire policy</th><th>Behavior after downtime</th><th>Use case</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Skip</strong></td><td>Ignore missed runs and schedule the next future time</td><td>Periodic cache refresh</td></tr>
+                <tr><td><strong>Fire once now</strong></td><td>Collapse all missed runs into one execution</td><td>Summary or synchronization</td></tr>
+                <tr><td><strong>Catch up all</strong></td><td>Create each missed occurrence with rate limits</td><td>Financial processing</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Daylight-saving transitions make local times ambiguous or nonexistent.
+              Use an IANA zone database and define whether “02:30 every day” skips,
+              moves, or executes twice during a transition. Store every concrete
+              occurrence in UTC after applying that policy.
+            </p>
+            <p>
+              A recurrence materializer uses a conditional
+              <code>next_occurrence</code> update and deterministic occurrence IDs,
+              so concurrent retries cannot create duplicates.
+            </p>
+          </section>
+
+          <section id="failures">
+            <span class="section-number">09 / RECOVERY</span>
+            <h2>Make every transition replayable</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Failure</th><th>Recovery</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Coordinator dies before claim</td><td>New lease owner reloads overlapping due buckets</td></tr>
+                <tr><td>Claim commits, relay dies</td><td>Durable outbox remains and another relay publishes it</td></tr>
+                <tr><td>Kafka publishes twice</td><td>Worker's conditional READY claim accepts only one execution</td></tr>
+                <tr><td>Worker dies during execution</td><td>Lease expires; reaper creates a new attempt with the same effect ID</td></tr>
+                <tr><td>Completion response is lost</td><td>Retry observes SUCCEEDED or downstream idempotency record</td></tr>
+              </tbody>
+            </table>
+            <h3>Retry policy</h3>
+            <p>
+              Use exponential backoff with full jitter and a maximum attempt count.
+              Distinguish transient errors from permanent validation errors. Rate
+              limits and explicit retry-after values override generic backoff.
+              Store the next attempt as another scheduled task rather than sleeping
+              a worker thread.
+            </p>
+            <pre>delay = random(0, min(max_delay, base × 2^attempt))</pre>
+            <p>
+              Exhausted or permanent failures move to a dead-letter store with the
+              payload reference, error class, attempts, and code version. Operators
+              can inspect and redrive after correcting the cause. Redrive preserves
+              the original task and execution identities.
+            </p>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">10 / MULTI-REGION</span>
+            <h2>Give each schedule one home region</h2>
+            <p>
+              Assign schedules to a home region by tenant or explicit data-residency
+              policy. That region owns timing and state transitions; workers may run
+              elsewhere when the task type permits. This avoids two regions
+              dispatching the same due task during replication lag.
+            </p>
+            <p>
+              Replicate schedule records and outbox state to a failover region. On
+              outage, obtain a global fencing epoch, wait for or verify the replicated
+              watermark, then allow the failover coordinator to acquire shard leases.
+              Some duplicates remain possible, so execution idempotency is still
+              required.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Short regional outage</h3>
+                <p>
+                  Preserve single ownership and dispatch overdue tasks when the
+                  home returns. This favors duplicate control over punctuality.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Extended outage</h3>
+                <p>
+                  Promote the replica with a fenced epoch and apply each task's
+                  misfire policy. This favors availability with bounded duplicates.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">11 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>APIs and coordinators</td><td><strong>Go</strong></td><td>Efficient timers, concurrency, and predictable services</td></tr>
+                <tr><td>Schedule state</td><td><strong>DynamoDB</strong></td><td>Conditional writes, transactions, time-bucket partitions, and streams</td></tr>
+                <tr><td>Shard ownership</td><td><strong>etcd</strong></td><td>Fenced leases and linearizable ownership changes</td></tr>
+                <tr><td>Dispatch queues</td><td><strong>Apache Kafka</strong></td><td>Durable buffering, priority topics, replay, and consumer groups</td></tr>
+                <tr><td>Large payloads</td><td><strong>Amazon S3</strong></td><td>Immutable, durable payload references outside the hot table</td></tr>
+                <tr><td>Worker deployment</td><td><strong>Kubernetes</strong></td><td>Independent autoscaling by task type, lag, and resource need</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Dispatch lag, lease health, retries, and deadline SLOs</td></tr>
+              </tbody>
+            </table>
+            <h3>Production signals</h3>
+            <ul>
+              <li>Due-to-dispatch and due-to-start latency by tenant and task type</li>
+              <li>Time-bucket query latency, shard skew, and prefetch horizon coverage</li>
+              <li>Coordinator lease renewal and ownership changes</li>
+              <li>Outbox age, Kafka lag, and worker queue depth</li>
+              <li>Running lease expirations, retry rate, and duplicate claims</li>
+              <li>Success, permanent failure, timeout, and dead-letter rate</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              DynamoDB stores schedules in sharded time buckets, while etcd gives
+              each coordinator fenced ownership of virtual shards. Coordinators
+              prefetch a short horizon into timing wheels and atomically create
+              outbox records for due work. Kafka decouples dispatch from Kubernetes
+              worker pools. Execution leases recover abandoned tasks, deterministic
+              IDs make side effects idempotent, and explicit misfire policies make
+              recurring schedules predictable through downtime and clock changes.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
