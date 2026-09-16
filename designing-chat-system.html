@@ -219,7 +219,7 @@
             <a href="#send">Message flow</a>
             <a href="#ordering">Ordering</a>
             <a href="#storage">Storage</a>
-            <a href="#groups">Group fan-out</a>
+            <a href="#groups">Celebrity groups</a>
             <a href="#sync">Offline sync</a>
             <a href="#presence">Presence</a>
             <a href="#regions">Multi-region</a>
@@ -535,7 +535,7 @@ server → client
 
           <section id="groups">
             <span class="section-number">08 / FAN-OUT</span>
-            <h2>Scale fan-out by active devices</h2>
+            <h2>Treat celebrity groups as channels</h2>
             <p>
               After persistence, the fan-out service reads the conversation's
               membership version and finds online devices in Redis. It batches
@@ -547,23 +547,167 @@ server → client
               <div class="card">
                 <h3>Small groups</h3>
                 <p>
-                  Push immediately to every connected member. The low fan-out gives
-                  the best latency and straightforward receipts.
+                  Resolve every online member and push directly. Per-user delivery
+                  and read cursors remain affordable and easy to explain.
                 </p>
               </div>
               <div class="card">
-                <h3>Very large groups</h3>
+                <h3>Celebrity broadcast groups</h3>
                 <p>
-                  Gateways subscribe only while they host interested users. Batch
-                  delivery by gateway and let clients fetch missed history.
+                  Store one durable channel log, send one copy to each interested
+                  gateway, and let that gateway fan out to its local sockets.
                 </p>
               </div>
             </div>
             <p>
-              A celebrity channel with millions of members should use a pub/sub
-              channel design rather than per-member chat fan-out. Product limits
-              on group size protect both latency and storage hot partitions.
+              The switch should use estimated online fan-out cost, not only total
+              membership. A group with five million members but 500 online users
+              is cheaper than a 50,000-member group with 40,000 online. Once the
+              estimated direct fan-out exceeds a regional budget, use channel mode.
             </p>
+
+            <div class="diagram" role="img" aria-label="Celebrity group fan-out architecture">
+              <svg viewBox="0 0 1000 440" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="celebrity-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#celebrity-arrow)">
+                  <path d="M145 90H200"/>
+                  <path d="M330 90H390"/>
+                  <path d="M510 90H570"/>
+                  <path d="M450 125V300"/>
+                  <path d="M630 125V160H755"/>
+                  <path d="M630 125V242H755"/>
+                  <path d="M630 125V302H755"/>
+                  <path d="M875 182H930"/>
+                  <path d="M875 242H930"/>
+                  <path d="M875 302H930"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#celebrity-arrow)">
+                  <path d="M630 315V125"/>
+                  <path d="M450 335H200"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="200" y="55" width="130" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="390" y="55" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="570" y="55" width="120" height="70" rx="11" stroke="#3369a5"/>
+                  <rect x="755" y="155" width="120" height="55" rx="11" stroke="#3369a5"/>
+                  <rect x="755" y="215" width="120" height="55" rx="11" stroke="#3369a5"/>
+                  <rect x="755" y="275" width="120" height="55" rx="11" stroke="#3369a5"/>
+                  <rect x="930" y="155" width="60" height="55" rx="11"/>
+                  <rect x="930" y="215" width="60" height="55" rx="11"/>
+                  <rect x="930" y="275" width="60" height="55" rx="11"/>
+                  <rect x="390" y="300" width="120" height="70" rx="11"/>
+                  <rect x="570" y="300" width="120" height="70" rx="11"/>
+                  <rect x="25" y="300" width="175" height="70" rx="11"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Sender</text>
+                  <text x="265" y="81" fill="#176b55">Chat API</text>
+                  <text x="265" y="99" fill="#176b55">+ rate limit</text>
+                  <text x="450" y="81" fill="#74519b">Kafka channel</text>
+                  <text x="450" y="99" fill="#74519b">partition</text>
+                  <text x="630" y="81" fill="#234b78">Regional</text>
+                  <text x="630" y="99" fill="#234b78">dispatcher</text>
+                  <text x="815" y="189" fill="#234b78">Gateway A</text>
+                  <text x="815" y="249" fill="#234b78">Gateway B</text>
+                  <text x="815" y="309" fill="#234b78">Gateway C</text>
+                  <text x="960" y="188">local</text>
+                  <text x="960" y="248">local</text>
+                  <text x="960" y="308">local</text>
+                  <text x="450" y="326">Cassandra</text>
+                  <text x="450" y="344">channel history</text>
+                  <text x="630" y="326">Redis active</text>
+                  <text x="630" y="344">subscriptions</text>
+                  <text x="112" y="326">Offline / reconnecting</text>
+                  <text x="112" y="344">clients pull by cursor</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="785" y="115">one event per interested gateway</text>
+                  <text x="705" y="405">gateways perform the unavoidable per-socket writes locally</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                The service sends one cross-service copy per gateway—not one per
+                member. Offline devices recover from the shared channel log.
+              </p>
+            </div>
+
+            <h3>Why gateway-level fan-out helps</h3>
+            <p>
+              Suppose a channel has five million members, one million currently
+              online, and those sockets are spread across 2,000 gateways. Naive
+              fan-out performs one million membership lookups and one million
+              cross-service sends. Channel mode performs about 2,000 dispatcher
+              sends—one per interested gateway. The final one million socket
+              writes are unavoidable, but they happen in parallel where the
+              connections already live.
+            </p>
+            <ol class="steps">
+              <li>
+                <strong>Register interest.</strong> When the first local member
+                opens the channel, a gateway adds its ID to a Redis sorted set
+                keyed by <code>(channel_id, region)</code>, using lease expiration
+                time as the score. Later local members only increment a local count.
+              </li>
+              <li>
+                <strong>Commit once.</strong> The home-region Kafka partition
+                assigns the message's channel sequence, and a consumer writes one
+                copy to Cassandra.
+              </li>
+              <li>
+                <strong>Dispatch by region and gateway.</strong> Dispatchers read
+                unexpired gateway IDs with <code>ZRANGEBYSCORE</code> and batch
+                one message per gateway stream rather than expanding the complete
+                member list.
+              </li>
+              <li>
+                <strong>Filter locally.</strong> Each gateway sends only to its
+                connected, authorized channel members. Membership-version events
+                revoke removed users from local subscription maps.
+              </li>
+              <li>
+                <strong>Recover by cursor.</strong> A slow, disconnected, or
+                restarted client requests messages after its last channel sequence
+                instead of requiring the server to retain a personal delivery queue.
+              </li>
+            </ol>
+
+            <h3>Receipts and notifications must change at scale</h3>
+            <p>
+              Do not generate a per-member delivered or read event for a celebrity
+              message; that recreates the original fan-out problem in reverse.
+              Keep each device's read cursor, but expose only aggregate approximate
+              reach to the channel owner. Send APNs or FCM notifications according
+              to mention and preference rules, and collapse multiple channel
+              messages into one notification or digest.
+            </p>
+
+            <h3>Broadcast channel versus giant interactive room</h3>
+            <p>
+              A celebrity broadcast channel has few writers and many readers, so
+              one Kafka partition usually has enough write throughput while
+              gateway-level fan-out solves the read explosion. A giant interactive
+              room can also have extreme write throughput. One ordered partition
+              then becomes the bottleneck.
+            </p>
+            <p>
+              Strict total order and unlimited writes cannot both scale. Rate-limit
+              senders, restrict large rooms to approved writers, or split the room
+              into independently ordered subchannels such as topics or regional
+              stages. If the product merges those subchannels, order by
+              <code>(server_time, message_id)</code> and document that the result
+              is deterministic but not one strict real-time global order.
+            </p>
+            <div class="callout">
+              <strong>Key rule:</strong> never materialize a durable inbox row for
+              every celebrity-group member. Persist one channel message, deliver
+              only to active gateways, and use cursor-based reads as the correctness
+              path whenever live delivery is missed.
+            </div>
           </section>
 
           <section id="sync">
