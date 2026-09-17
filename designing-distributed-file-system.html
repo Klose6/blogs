@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a scalable and reliable distributed file system.">
+  <title>Designing a Distributed File System</title>
+  <style>
+    :root{
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#27785e;--accent-dark:#185440;
+      --blue:#285f8f;--purple:#74519b;--orange:#b45d18;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(39,120,94,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--accent);
+      content:"";box-shadow:0 0 0 4px rgba(39,120,94,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px}ul,ol{padding-left:1.25rem}li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--accent);font-weight:700}.warn{color:#a9321d;font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a Distributed File System</h1>
+          <div class="meta">
+            <span class="pill">Chunk storage</span>
+            <span class="pill">Raft metadata</span>
+            <span class="pill">Replication</span>
+            <span class="pill">15 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we store petabytes across ordinary machines while preserving a
+          familiar file namespace, surviving disk loss, and streaming data at high
+          throughput? The design separates strongly consistent metadata from a
+          distributed chunk data plane.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#chunks">Files and chunks</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#metadata">Metadata plane</a>
+            <a href="#read">Read path</a>
+            <a href="#write">Write path</a>
+            <a href="#durability">Durability</a>
+            <a href="#failures">Failure recovery</a>
+            <a href="#consistency">Consistency</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Optimize for large durable files</h2>
+            <p>
+              The system supports create, open, sequential and random reads,
+              append, rename, list, snapshot, and delete. It targets large
+              analytics, media, backup, and model files. Full POSIX semantics,
+              memory-mapped I/O, and tiny-file workloads are explicitly outside
+              the first version.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Hierarchical directories and file permissions</li>
+                  <li>Streaming reads, append, rename, and delete</li>
+                  <li>Snapshots and immutable file versions</li>
+                  <li>Storage quotas and placement policies</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>Petabytes of logical data and billions of files</li>
+                  <li>No acknowledged chunk lost after one node failure</li>
+                  <li>High sequential throughput and horizontal scaling</li>
+                  <li>Automatic repair, rebalancing, and corruption detection</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Design boundary:</strong> this is a GFS-style file system,
+              not an object store. It exposes directories and append, but relaxes
+              expensive POSIX behavior such as arbitrary concurrent byte-range
+              writes and cross-shard atomic transactions.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Size metadata separately from bytes</h2>
+            <p>
+              Assume 10 PB of logical data, one billion files, a 10 MB average
+              file, 128 MB chunks, 100 GB/s aggregate reads, and 20 GB/s writes.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">78M</div>
+                <h3>full-size chunks</h3>
+                <p>10 PB divided by 128 MB, before partial chunks.</p>
+              </div>
+              <div class="card">
+                <div class="metric">1+ TB</div>
+                <h3>file metadata</h3>
+                <p>At roughly 1 KB per file before replication.</p>
+              </div>
+              <div class="card">
+                <div class="metric">30 PB</div>
+                <h3>triple-replicated data</h3>
+                <p>Before moving colder files to erasure coding.</p>
+              </div>
+            </div>
+            <p>
+              One billion files produce more metadata pressure than 78 million
+              full chunks because most files are smaller than one chunk. Small
+              files should be packed into immutable container files or redirected
+              to an object store; otherwise namespace and disk-seek overhead dominate.
+            </p>
+          </section>
+
+          <section id="chunks">
+            <span class="section-number">03 / LAYOUT</span>
+            <h2>Split files into immutable-versioned chunks</h2>
+            <pre>File inode
+  file_id:      0199f...
+  version:      17
+  size:         402,653,184 bytes
+  chunks: [
+    { index: 0, chunk_id: c_842, version: 3 },
+    { index: 1, chunk_id: c_843, version: 1 },
+    { index: 2, chunk_id: c_844, version: 1 }
+  ]</pre>
+            <p>
+              A 128 MB chunk amortizes metadata and supports large sequential I/O.
+              Each chunk has a stable ID, generation number, checksum table, and
+              replica locations. Clients translate a byte offset into a chunk index,
+              then transfer bytes directly to storage nodes.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Chunk size</th><th>Benefit</th><th>Cost</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Small: 4–16 MB</strong></td><td>Less over-fetch and finer repair</td><td>More metadata and seeks</td></tr>
+                <tr><td><strong>Medium: 64–128 MB</strong></td><td>Balanced metadata and parallelism</td><td>Good default for mixed large files</td></tr>
+                <tr><td><strong>Large: 256 MB+</strong></td><td>Excellent streaming efficiency</td><td>Slow repair and poor small-file utilization</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Keep file bytes off metadata servers</h2>
+            <div class="diagram" role="img" aria-label="Distributed file system architecture">
+              <svg viewBox="0 0 1000 480" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="dfs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <path d="M145 90H210" fill="none" stroke="#65716a" stroke-width="2"
+                  marker-start="url(#dfs-arrow)" marker-end="url(#dfs-arrow)"/>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#dfs-arrow)">
+                  <path d="M330 90H390"/>
+                  <path d="M450 125V190"/>
+                  <path d="M510 225H570"/>
+                  <path d="M690 225H750"/>
+                  <path d="M690 215H720V95H750"/>
+                  <path d="M690 235H720V355H750"/>
+                  <path d="M270 125V350H750"/>
+                  <path d="M450 260V325"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#dfs-arrow)">
+                  <path d="M450 395V260"/>
+                  <path d="M870 95H930"/>
+                  <path d="M870 225H930"/>
+                  <path d="M870 355H930"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="210" y="55" width="120" height="70" rx="11" stroke="#27785e"/>
+                  <rect x="390" y="55" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="390" y="190" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="570" y="190" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="750" y="60" width="120" height="70" rx="11"/>
+                  <rect x="750" y="190" width="120" height="70" rx="11"/>
+                  <rect x="750" y="320" width="120" height="70" rx="11"/>
+                  <rect x="930" y="60" width="60" height="70" rx="11"/>
+                  <rect x="930" y="190" width="60" height="70" rx="11"/>
+                  <rect x="930" y="320" width="60" height="70" rx="11"/>
+                  <rect x="380" y="325" width="140" height="70" rx="11" stroke="#b45d18"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Applications</text>
+                  <text x="270" y="81" fill="#185440">DFS client</text>
+                  <text x="270" y="99" fill="#185440">library</text>
+                  <text x="450" y="81" fill="#285f8f">Namespace</text>
+                  <text x="450" y="99" fill="#285f8f">router</text>
+                  <text x="450" y="216" fill="#285f8f">Metadata Raft</text>
+                  <text x="450" y="234" fill="#285f8f">shard</text>
+                  <text x="630" y="216" fill="#74519b">Placement +</text>
+                  <text x="630" y="234" fill="#74519b">repair service</text>
+                  <text x="810" y="101">Chunk node A</text>
+                  <text x="810" y="231">Chunk node B</text>
+                  <text x="810" y="361">Chunk node C</text>
+                  <text x="960" y="101">disk</text>
+                  <text x="960" y="231">disk</text>
+                  <text x="960" y="361">disk</text>
+                  <text x="450" y="351" fill="#b45d18">Inventory +</text>
+                  <text x="450" y="369" fill="#b45d18">heartbeats</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="605" y="145">metadata path</text>
+                  <text x="520" y="425">clients transfer bytes directly to selected chunk nodes</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Clients consult metadata for chunk locations and leases, then
+                bypass that plane for high-bandwidth transfers to storage nodes.
+              </p>
+            </div>
+          </section>
+
+          <section id="metadata">
+            <span class="section-number">05 / CONTROL PLANE</span>
+            <h2>Replicate and shard namespace metadata</h2>
+            <p>
+              Metadata contains inodes, directory entries, permissions, file-to-
+              chunk mappings, chunk generations, leases, snapshots, and placement
+              intent. Each metadata tablet is a three- or five-node Raft group, so
+              namespace changes commit only after a quorum persists the log.
+            </p>
+            <p>
+              A small root directory maps inode ranges or directory subtrees to
+              tablets. Split hot tablets by inode range; avoid permanently tying a
+              shard to one top-level directory because one tenant may become hot.
+              Clients cache routing and chunk-location metadata with versions and
+              short leases.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Strongly consistent</h3>
+                <p>
+                  Create, rename within a shard, delete, permission changes, chunk
+                  generation, and primary lease ownership.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Eventually consistent</h3>
+                <p>
+                  Replica inventory, disk utilization, access heat, repair progress,
+                  and cached chunk locations.
+                </p>
+              </div>
+            </div>
+            <p>
+              Cross-shard rename needs a transaction coordinator or a restricted
+              semantic. The first version supports atomic rename only within one
+              namespace shard and implements cross-shard move as copy plus delete.
+            </p>
+          </section>
+
+          <section id="read">
+            <span class="section-number">06 / READ PATH</span>
+            <h2>Resolve once, stream directly</h2>
+            <ol class="steps">
+              <li>
+                <strong>Resolve the path.</strong> The client asks the namespace
+                router for an inode, file version, chunk ID, and generation.
+              </li>
+              <li>
+                <strong>Select a replica.</strong> Metadata returns healthy
+                locations ordered by rack, region, load, and network proximity.
+              </li>
+              <li>
+                <strong>Read bytes directly.</strong> The client sends chunk ID,
+                generation, byte range, and authorization token to a chunk node.
+              </li>
+              <li>
+                <strong>Verify checksums.</strong> The client validates each data
+                block and retries another replica on mismatch or timeout.
+              </li>
+              <li>
+                <strong>Report corruption.</strong> A background signal asks the
+                repair service to quarantine and reconstruct the bad replica.
+              </li>
+            </ol>
+            <p>
+              Cache file-to-chunk metadata until its lease or version expires.
+              Stream sequential reads from multiple chunk replicas in parallel,
+              but limit read-ahead so one abandoned request does not waste network.
+            </p>
+          </section>
+
+          <section id="write">
+            <span class="section-number">07 / WRITE PATH</span>
+            <h2>Order writes through a leased primary</h2>
+            <ol class="steps">
+              <li>
+                <strong>Allocate.</strong> Metadata selects three chunk nodes in
+                distinct failure domains and grants one a fenced primary lease.
+              </li>
+              <li>
+                <strong>Pipeline data.</strong> The client streams bytes to the
+                closest replica, which forwards them to the next. Every replica
+                buffers the same data under a write ID.
+              </li>
+              <li>
+                <strong>Choose order.</strong> The client asks the primary to
+                commit. The primary assigns a serial mutation sequence.
+              </li>
+              <li>
+                <strong>Apply everywhere.</strong> Replicas verify the lease epoch,
+                write data and checksums, fsync according to policy, and acknowledge.
+              </li>
+              <li>
+                <strong>Commit metadata.</strong> After the required acknowledgements,
+                the file length and chunk generation advance atomically.
+              </li>
+            </ol>
+            <pre>write identity:
+  (file_id, chunk_index, file_version, client_request_id)
+
+fencing:
+  accept only if lease_epoch == current_chunk_epoch
+
+success:
+  primary + at least one cross-zone replica persisted</pre>
+            <p>
+              Stable client request IDs make retries idempotent. A stale primary
+              cannot commit after failover because every replica rejects its old
+              lease epoch. Concurrent appends are ordered by the current primary;
+              arbitrary overlapping writes are rejected or serialized.
+            </p>
+          </section>
+
+          <section id="durability">
+            <span class="section-number">08 / STORAGE</span>
+            <h2>Replicate hot data, erasure-code cold data</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Policy</th><th>Storage overhead</th><th>Best use</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>3× replication</strong></td><td>200% extra</td><td>Hot writes, fast reads, and simple repair</td></tr>
+                <tr><td><strong>6+3 erasure coding</strong></td><td>50% extra</td><td>Cold immutable files with lower storage cost</td></tr>
+                <tr><td><strong>Single copy</strong></td><td>No extra</td><td>Only disposable scratch data</td></tr>
+              </tbody>
+            </table>
+            <p>
+              New and frequently accessed chunks use three replicas. A background
+              lifecycle job converts sealed cold files into six data and three
+              parity fragments across failure domains. Any six fragments reconstruct
+              the chunk. Reads usually fetch only data fragments; repair uses parity.
+            </p>
+            <h3>Checksums and scrubbing</h3>
+            <p>
+              Store a CRC32C checksum for every 64 KB data block and a cryptographic
+              hash for whole immutable chunks. Verify checksums on read and during
+              periodic scrubbing. Silent corruption is a normal storage failure,
+              not an exceptional impossibility.
+            </p>
+          </section>
+
+          <section id="failures">
+            <span class="section-number">09 / RECOVERY</span>
+            <h2>Rebuild from desired state and inventory</h2>
+            <p>
+              Chunk nodes send heartbeats with disk health, capacity, and a digest
+              of chunk inventory. Full inventory scans reconcile actual chunks
+              against metadata after restart. Metadata records desired placement;
+              chunk nodes report physical reality.
+            </p>
+            <ul>
+              <li><strong>Disk failure:</strong> quarantine the device and copy affected chunks from healthy replicas.</li>
+              <li><strong>Node failure:</strong> expire its heartbeat and prioritize chunks below minimum durability.</li>
+              <li><strong>Rack loss:</strong> placement rules ensure another rack already owns a copy or parity fragment.</li>
+              <li><strong>Metadata leader failure:</strong> Raft elects a follower with the committed log.</li>
+              <li><strong>Stale replica:</strong> reject old generations and garbage-collect only after a safety delay.</li>
+              <li><strong>Corrupt replica:</strong> quarantine, read from another copy, and reconstruct in the background.</li>
+            </ul>
+            <p>
+              Rate-limit repair so it does not consume all foreground bandwidth.
+              Prioritize chunks with zero or one healthy copy, then restore placement
+              diversity, then rebalance capacity. Repair reads should come from
+              multiple source nodes to avoid creating a recovery hot spot.
+            </p>
+            <h3>Rebalancing</h3>
+            <p>
+              The placement service considers free space, disk and network load,
+              rack diversity, and access heat. Copy a chunk to its target and verify
+              checksums before deleting the old replica. Never move the final healthy
+              copy, and add hysteresis so chunks do not oscillate between nodes.
+            </p>
+          </section>
+
+          <section id="consistency">
+            <span class="section-number">10 / SEMANTICS</span>
+            <h2>State the consistency model precisely</h2>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Namespace</h3>
+                <p>
+                  Linearizable within a metadata shard. A successful create,
+                  permission change, or same-shard rename is immediately visible.
+                </p>
+              </div>
+              <div class="card">
+                <h3>File contents</h3>
+                <p>
+                  Immutable file versions are strongly readable. Appends become
+                  visible after the primary commits the new length and generation.
+                </p>
+              </div>
+            </div>
+            <p>
+              Readers pin a file version when opening it, giving a stable snapshot
+              while new appends continue. A fresh open sees the latest committed
+              version. Snapshots copy metadata references, not bytes; copy-on-write
+              creates new chunks only when data changes.
+            </p>
+            <div class="callout">
+              <strong>Deletion is two phase:</strong> first tombstone the namespace
+              entry so new opens fail, then garbage-collect unreferenced chunks
+              after snapshots, leases, and a recovery grace period expire.
+            </div>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">11 / MULTI-REGION</span>
+            <h2>Keep synchronous writes within one region</h2>
+            <p>
+              A volume has a home region whose metadata Raft groups and synchronous
+              chunk replicas span availability zones. Cross-ocean quorum writes
+              would add unacceptable latency and lose availability during a wide-area
+              partition.
+            </p>
+            <p>
+              Replicate sealed file versions and the namespace journal asynchronously
+              to a disaster-recovery region. Read-only replicas may serve immutable
+              versions there. Promote the backup only after fencing the old region
+              and choosing a journal recovery point; recent acknowledged writes need
+              cross-region synchronous replication only for explicitly premium volumes.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Regional reads</h3>
+                <p>
+                  Cache or replicate immutable hot chunks near readers. Metadata
+                  tokens pin the exact version and prevent mixed-version files.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Active-active writes</h3>
+                <p>
+                  Avoid them for one namespace. Assign different volumes or
+                  subtrees to different home regions instead of merging conflicts.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">12 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Metadata and chunk services</td><td><strong>Rust + Tokio</strong></td><td>Memory safety, controlled allocation, and high-throughput async I/O</td></tr>
+                <tr><td>Internal protocol</td><td><strong>gRPC + Protobuf</strong></td><td>Streaming RPCs, deadlines, and versioned contracts</td></tr>
+                <tr><td>Metadata consensus</td><td><strong>Raft + RocksDB</strong></td><td>Replicated ordering with local persistent state</td></tr>
+                <tr><td>Chunk storage</td><td><strong>XFS on NVMe/HDD</strong></td><td>Mature local allocation, direct I/O, and mixed storage tiers</td></tr>
+                <tr><td>Erasure coding</td><td><strong>ISA-L Reed-Solomon</strong></td><td>Fast vectorized encoding and reconstruction</td></tr>
+                <tr><td>Membership and config</td><td><strong>etcd</strong></td><td>Small linearizable cluster for service discovery—not file metadata</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Capacity, latency, corruption, quorum, and repair signals</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Building a file system is rarely the right business choice. Use
+              <strong>CephFS</strong> when you need a mature POSIX-like distributed
+              file system, <strong>HDFS</strong> for Hadoop-oriented large-file
+              analytics, or <strong>S3</strong> when object semantics are sufficient.
+              Build this design only for requirements those systems cannot satisfy.
+            </p>
+            <h3>Production signals</h3>
+            <ul>
+              <li>Metadata operation latency, Raft commit time, and tablet hot spots</li>
+              <li>Read/write throughput and tail latency by chunk node and disk</li>
+              <li>Under-replicated, unavailable, corrupt, and stale chunks</li>
+              <li>Repair queue age, reconstruction bandwidth, and time to durability</li>
+              <li>Disk fullness, placement diversity, and rebalancing movement</li>
+              <li>Checksum failures, lease fencing rejects, and client retry rate</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              Raft-replicated metadata shards own the namespace, chunk maps, and
+              fenced write leases. Clients resolve metadata once, then stream bytes
+              directly to chunk nodes. Hot chunks use cross-zone replication; cold
+              immutable files use erasure coding. Checksums detect silent corruption,
+              heartbeats and inventory rebuild desired placement, and controlled
+              repair restores durability. Home-region writes keep latency practical,
+              while immutable versions and asynchronous replication support remote
+              reads and disaster recovery.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
