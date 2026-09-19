@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a low-latency typeahead service.">
+  <title>Designing Typeahead</title>
+  <style>
+    :root{
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#3869ad;--accent-dark:#254b7f;
+      --green:#176b55;--purple:#74519b;--orange:#b45d18;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(56,105,173,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--green);
+      content:"";box-shadow:0 0 0 4px rgba(23,107,85,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px}ul,ol{padding-left:1.25rem}li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--green);font-weight:700}.warn{color:#a9321d;font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing Typeahead</h1>
+          <div class="meta">
+            <span class="pill">Prefix search</span>
+            <span class="pill">FST indexes</span>
+            <span class="pill">Ranking</span>
+            <span class="pill">13 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we return useful suggestions after every keystroke in a few
+          milliseconds while trends, language, safety rules, and personal history
+          keep changing? The design combines compact prefix snapshots with a small
+          real-time delta index.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#structures">Index structures</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#query">Query path</a>
+            <a href="#indexing">Index construction</a>
+            <a href="#ranking">Ranking</a>
+            <a href="#fuzzy">Typo tolerance</a>
+            <a href="#sharding">Sharding and caching</a>
+            <a href="#safety">Safety and privacy</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Suggest intent before search begins</h2>
+            <p>
+              The service accepts a partial query and returns a small ranked list
+              of query, entity, or product suggestions. Results account for locale,
+              market, device, current trends, and—when permitted—personal history.
+              Full document search remains a separate downstream system.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Prefix completion across languages and scripts</li>
+                  <li>Popularity, freshness, and quality ranking</li>
+                  <li>Optional personalization and typo correction</li>
+                  <li>Safety filters, blocklists, and editorial controls</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>Server latency below 30 ms at p99</li>
+                  <li>High availability during index rebuilds</li>
+                  <li>Trending suggestions visible within minutes</li>
+                  <li>No partial or mixed index version during rollout</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Product boundary:</strong> typeahead optimizes for a handful
+              of highly likely completions, not exhaustive recall. Returning the
+              best 10 suggestions quickly is more important than finding every
+              string that shares a prefix.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Every search produces several requests</h2>
+            <p>
+              Assume one billion searches per day, five typeahead calls per search,
+              a 10× peak multiplier, 100 million eligible suggestions, and a 100 GB
+              compressed global index before replication.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">58k/s</div>
+                <h3>average queries</h3>
+                <p>Plan for roughly 580k/s at peak.</p>
+              </div>
+              <div class="card">
+                <div class="metric">10–20</div>
+                <h3>results per call</h3>
+                <p>Small responses keep network cost modest.</p>
+              </div>
+              <div class="card">
+                <div class="metric">100 GB</div>
+                <h3>compressed snapshot</h3>
+                <p>Partition and memory-map it across serving nodes.</p>
+              </div>
+            </div>
+            <p>
+              Traffic is read-heavy and prefix popularity follows a steep power
+              law. Empty and one-character prefixes are extremely hot, while long
+              prefixes have enormous cardinality and low individual frequency.
+            </p>
+          </section>
+
+          <section id="structures">
+            <span class="section-number">03 / INDEX</span>
+            <h2>Store top results at each prefix</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Structure</th><th>Strength</th><th>Weakness</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Trie</strong></td>
+                  <td>Natural O(prefix length) lookup and easy updates</td>
+                  <td>Pointer-heavy and expensive for large vocabularies</td>
+                </tr>
+                <tr>
+                  <td><strong>Sorted array</strong></td>
+                  <td>Compact and simple range search by binary search</td>
+                  <td>Must scan or maintain extra ranking data</td>
+                </tr>
+                <tr>
+                  <td><strong>Finite-state transducer</strong></td>
+                  <td>Shares suffixes, compresses strings, and supports weighted lookup</td>
+                  <td>Usually immutable and expensive to update in place</td>
+                </tr>
+                <tr>
+                  <td><strong>Search engine</strong></td>
+                  <td>Built-in analyzers, fuzzy search, and operational tooling</td>
+                  <td>More latency and memory than a specialized top-K index</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Use an immutable weighted FST for the large baseline and a small
+              mutable trie for fresh trends and editorial changes. Each prefix
+              stores or can traverse to its top <code>K</code> suggestion IDs,
+              avoiding a scan of all matching strings.
+            </p>
+            <pre>prefix: "dis"
+top_k: [
+  { id: 842, text: "distributed systems", score: 0.98 },
+  { id: 119, text: "discord",             score: 0.91 },
+  { id: 551, text: "disney plus",         score: 0.87 }
+]</pre>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Separate serving from index production</h2>
+            <div class="diagram" role="img" aria-label="Typeahead architecture">
+              <svg viewBox="0 0 1000 480" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="typeahead-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#typeahead-arrow)">
+                  <path d="M145 90H200"/>
+                  <path d="M330 90H390"/>
+                  <path d="M265 55V25H630V55"/>
+                  <path d="M265 125V235H390"/>
+                  <path d="M265 125V285H630V270"/>
+                  <path d="M510 100V145H810V125"/>
+                  <path d="M690 90H750"/>
+                  <path d="M510 235H710V110H750"/>
+                  <path d="M690 235H720V115H750"/>
+                  <path d="M145 350H200"/>
+                  <path d="M320 350H380"/>
+                  <path d="M500 350H560"/>
+                  <path d="M680 350H740"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#typeahead-arrow)">
+                  <path d="M440 315V285H630V125"/>
+                  <path d="M800 315V285H530V145H450V125"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="200" y="55" width="130" height="70" rx="11" stroke="#3869ad"/>
+                  <rect x="390" y="55" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="570" y="55" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="750" y="55" width="120" height="70" rx="11"/>
+                  <rect x="390" y="200" width="120" height="70" rx="11"/>
+                  <rect x="570" y="200" width="120" height="70" rx="11"/>
+                  <rect x="25" y="315" width="120" height="70" rx="11"/>
+                  <rect x="200" y="315" width="120" height="70" rx="11" stroke="#b45d18"/>
+                  <rect x="380" y="315" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="560" y="315" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="740" y="315" width="120" height="70" rx="11" stroke="#3869ad"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Client</text>
+                  <text x="265" y="81" fill="#254b7f">Typeahead</text>
+                  <text x="265" y="99" fill="#254b7f">API</text>
+                  <text x="450" y="81" fill="#176b55">Prefix shard</text>
+                  <text x="450" y="99" fill="#176b55">FST snapshot</text>
+                  <text x="630" y="81" fill="#74519b">Real-time</text>
+                  <text x="630" y="99" fill="#74519b">delta trie</text>
+                  <text x="810" y="81">Rank + safety</text>
+                  <text x="810" y="99">merge</text>
+                  <text x="450" y="226">Redis hot</text>
+                  <text x="450" y="244">prefix cache</text>
+                  <text x="630" y="226">Personal</text>
+                  <text x="630" y="244">history store</text>
+                  <text x="85" y="341">Query logs +</text>
+                  <text x="85" y="359">content corpus</text>
+                  <text x="260" y="356" fill="#b45d18">Kafka</text>
+                  <text x="440" y="341" fill="#74519b">Flink trends</text>
+                  <text x="440" y="359" fill="#74519b">+ aggregation</text>
+                  <text x="620" y="341" fill="#176b55">Spark index</text>
+                  <text x="620" y="359" fill="#176b55">builder</text>
+                  <text x="800" y="341" fill="#254b7f">S3 versioned</text>
+                  <text x="800" y="359" fill="#254b7f">snapshots</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="540" y="440">offline snapshots and streaming deltas update independently of query serving</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Serving merges an immutable FST, a fresh delta trie, cache hits,
+                and optional personal signals; the indexing plane builds each input separately.
+              </p>
+            </div>
+          </section>
+
+          <section id="query">
+            <span class="section-number">05 / REQUEST PATH</span>
+            <h2>Do little work after each keystroke</h2>
+            <pre>GET /v1/typeahead
+  ?q=distri
+  &locale=en-US
+  &market=US
+  &limit=10
+  &session_id=0199...
+
+{
+  "suggestions": [
+    { "text": "distributed systems", "type": "query" },
+    { "text": "distributed cache",   "type": "query" }
+  ],
+  "index_version": "2026-09-19T17:00Z"
+}</pre>
+            <ol class="steps">
+              <li>
+                <strong>Normalize.</strong> Apply Unicode normalization, locale-
+                aware case folding, whitespace rules, and a maximum prefix length.
+              </li>
+              <li>
+                <strong>Check caches.</strong> Read an in-process TinyLFU cache,
+                then regional Redis for non-personalized prefix candidates.
+              </li>
+              <li>
+                <strong>Route one shard.</strong> Hash the normalized
+                <code>(locale, prefix)</code> to a replicated serving shard.
+              </li>
+              <li>
+                <strong>Merge candidates.</strong> Combine baseline FST, delta
+                trie, editorial entries, and optional personal history.
+              </li>
+              <li>
+                <strong>Filter and rank.</strong> Enforce safety and policy first,
+                score the remainder, deduplicate, and return the best results.
+              </li>
+            </ol>
+            <p>
+              Clients debounce input by roughly 50–100 ms and cancel older
+              requests. Every call carries a monotonically increasing client
+              sequence so a late response for <code>dis</code> cannot replace the
+              newer response for <code>distri</code>.
+            </p>
+          </section>
+
+          <section id="indexing">
+            <span class="section-number">06 / INDEX PIPELINE</span>
+            <h2>Build immutable snapshots, stream small changes</h2>
+            <p>
+              Candidate sources include successful search queries, clicks,
+              catalog entities, product inventory, editorial suggestions, and
+              policy blocklists. Raw logs are not accepted blindly: remove bots,
+              low-frequency strings, personal data, spam, and unsafe queries.
+            </p>
+            <ol class="steps">
+              <li>
+                Kafka collects query, impression, click, and corpus-change events.
+              </li>
+              <li>
+                Flink deduplicates, detects trends, and maintains minute and hour
+                aggregates by normalized query, locale, and market.
+              </li>
+              <li>
+                Spark joins longer history, quality labels, and safety decisions,
+                computes baseline weights, and builds partitioned weighted FSTs.
+              </li>
+              <li>
+                Builders write immutable files, checksums, and a signed manifest
+                to S3 under a new version.
+              </li>
+              <li>
+                Serving nodes download, verify, memory-map, warm, and atomically
+                swap the complete version without stopping queries.
+              </li>
+            </ol>
+            <p>
+              The real-time trie holds only changes since the snapshot and has a
+              strict memory cap. Once a new snapshot includes those events, advance
+              its watermark and discard the covered delta. This prevents the mutable
+              layer from growing without bound.
+            </p>
+          </section>
+
+          <section id="ranking">
+            <span class="section-number">07 / RELEVANCE</span>
+            <h2>Rank for completion probability and value</h2>
+            <pre>score =
+    0.35 × log(popularity)
+  + 0.25 × freshness_decay
+  + 0.20 × prefix_completion_probability
+  + 0.15 × personal_affinity
+  + 0.05 × business_quality
+  - policy_penalties</pre>
+            <p>
+              Actual weights come from offline evaluation and online experiments.
+              Popularity uses a logarithm so one globally dominant query does not
+              suppress every alternative. Freshness decays trending spikes; quality
+              considers downstream engagement rather than raw impression count.
+            </p>
+            <h3>Personalization</h3>
+            <p>
+              Personal history contributes candidates only after authorization and
+              user consent. Store a bounded, encrypted list of recent selected
+              queries or entities keyed by user. Merge it late in the request so
+              the global prefix result remains highly cacheable.
+            </p>
+            <p>
+              Never cache personalized output under a prefix-only key. Cache the
+              global candidates, then rerank them with user features in memory.
+              Provide history deletion and incognito modes that bypass personal signals.
+            </p>
+          </section>
+
+          <section id="fuzzy">
+            <span class="section-number">08 / TYPOS</span>
+            <h2>Use fuzzy matching only when it helps</h2>
+            <p>
+              Fuzzy lookup dramatically increases the candidate space. Do not run
+              edit-distance search for empty, one-character, or already productive
+              prefixes. Trigger it after three or more characters when exact prefix
+              results fall below a threshold.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Technique</th><th>Example</th><th>Cost</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Edit distance 1</strong></td><td><code>iphnoe → iphone</code></td><td>FST traversal with Levenshtein automaton</td></tr>
+                <tr><td><strong>Keyboard adjacency</strong></td><td><code>gppgle → google</code></td><td>Language and layout-specific substitutions</td></tr>
+                <tr><td><strong>Phonetic match</strong></td><td>Names with similar pronunciation</td><td>Locale-specific and prone to false positives</td></tr>
+                <tr><td><strong>Transliteration</strong></td><td>Latin input to another script</td><td>Requires language detection and alternate indexes</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Penalize fuzzy candidates below exact matches unless engagement
+              evidence strongly favors the correction. Return the intended
+              suggestion text—not an invisible rewrite—and measure correction
+              acceptance separately from normal completions.
+            </p>
+          </section>
+
+          <section id="sharding">
+            <span class="section-number">09 / SCALE</span>
+            <h2>Shard by normalized prefix, replicate hot ranges</h2>
+            <p>
+              Hash <code>(locale, normalized_prefix)</code> across virtual shards,
+              so one lookup reaches one owner and traffic distributes more evenly
+              than first-character partitioning. Each shard has replicas across
+              availability zones and memory-maps only its FST partition.
+            </p>
+            <p>
+              Empty and very short prefixes remain hot regardless of hashing.
+              Precompute them, replicate them to every API node, and refresh them
+              frequently. For other viral prefixes, the local TinyLFU and Redis
+              layers absorb traffic before it reaches FST shards.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Positive cache</h3>
+                <p>
+                  Cache global top-K candidates by prefix, locale, market, index
+                  version, and policy version.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Negative cache</h3>
+                <p>
+                  Cache no-result long prefixes briefly to stop repeated typo and
+                  bot traffic from reaching shards.
+                </p>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Version every cache key.</strong> Adding the snapshot and
+              policy versions makes rollout invalidation implicit. Old entries
+              expire naturally instead of requiring a global cache delete.
+            </div>
+          </section>
+
+          <section id="safety">
+            <span class="section-number">10 / TRUST</span>
+            <h2>Prevent the system from amplifying harm</h2>
+            <ul>
+              <li><strong>Minimum support:</strong> require enough distinct users before a query becomes globally eligible.</li>
+              <li><strong>Bot resistance:</strong> downweight coordinated or automated query and click bursts.</li>
+              <li><strong>PII removal:</strong> reject emails, phone numbers, account IDs, and rare person-specific strings.</li>
+              <li><strong>Policy filters:</strong> apply locale, age, legal, and safety rules after every candidate merge.</li>
+              <li><strong>Emergency removals:</strong> distribute a tiny signed denylist independently of full snapshots.</li>
+              <li><strong>Experiment safety:</strong> keep editorial and policy overrides outside model-controlled scores.</li>
+            </ul>
+            <p>
+              Trending data is especially vulnerable because freshness rewards
+              sudden volume. Require cross-user diversity, reputation-weighted
+              support, anomaly detection, and a delay before an unseen query can
+              enter the real-time trie.
+            </p>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">11 / MULTI-REGION</span>
+            <h2>Serve entirely from regional snapshots</h2>
+            <p>
+              Every region runs independent query replicas with the same signed
+              baseline manifest. S3 cross-region replication distributes snapshot
+              files; serving nodes activate only versions whose complete shard set,
+              checksums, model, and policy bundle are available.
+            </p>
+            <p>
+              Kafka mirrors aggregated trend events rather than raw personal query
+              logs when data residency requires it. Regional delta tries may differ
+              briefly, which is acceptable. A control plane tracks rollout health
+              and can pin or roll back each region atomically.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Indexing outage</h3>
+                <p>
+                  Keep serving the last valid snapshot. Freshness degrades, but
+                  request availability and correctness remain intact.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Delta failure</h3>
+                <p>
+                  Drop the mutable layer and serve baseline results. Never let a
+                  corrupt trend index take down typeahead.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">12 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Serving API</td><td><strong>Go + gRPC/HTTP</strong></td><td>Low allocation overhead and predictable tail latency</td></tr>
+                <tr><td>Baseline index</td><td><strong>Vellum FST</strong></td><td>Go-native compact prefix maps and automata-based traversal</td></tr>
+                <tr><td>Hot-prefix cache</td><td><strong>Ristretto + Redis</strong></td><td>Process-local TinyLFU plus shared regional caching</td></tr>
+                <tr><td>Event transport</td><td><strong>Apache Kafka</strong></td><td>Replayable query, click, and corpus streams</td></tr>
+                <tr><td>Real-time trends</td><td><strong>Apache Flink</strong></td><td>Bot-filtered event-time windows and delta updates</td></tr>
+                <tr><td>Snapshot builds</td><td><strong>Apache Spark</strong></td><td>Large joins, aggregation, and partitioned index generation</td></tr>
+                <tr><td>Snapshot storage</td><td><strong>S3</strong></td><td>Immutable versions, manifests, checksums, and regional replication</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Latency, cache, index, freshness, and safety SLOs</td></tr>
+              </tbody>
+            </table>
+            <h3>Production signals</h3>
+            <ul>
+              <li>End-to-end and server latency by prefix length and locale</li>
+              <li>Suggestion selection, abandonment, and reformulation rate</li>
+              <li>Local cache, Redis, FST, delta, and fuzzy lookup hit rates</li>
+              <li>Snapshot age, regional version skew, and activation failures</li>
+              <li>Delta size, trend lag, and baseline fallback rate</li>
+              <li>Unsafe suggestion blocks, emergency removals, and abuse anomalies</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              Build compact weighted FST snapshots from cleaned query and corpus
+              data, then memory-map them across sharded Go serving nodes. Flink
+              maintains a bounded delta trie for fresh trends, while Ristretto and
+              Redis absorb hot prefixes. The request path merges global, fresh,
+              editorial, and optional personal candidates before safety filtering
+              and ranking. Versioned immutable snapshots make regional rollout and
+              rollback safe, and the baseline remains available whenever indexing,
+              trends, or personalization fail.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
