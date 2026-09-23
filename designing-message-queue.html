@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a durable distributed message queue.">
+  <title>Designing a Message Queue</title>
+  <style>
+    :root{
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#a75528;--accent-dark:#713817;
+      --green:#176b55;--blue:#285f8f;--purple:#74519b;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(167,85,40,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--green);
+      content:"";box-shadow:0 0 0 4px rgba(23,107,85,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px}ul,ol{padding-left:1.25rem}li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--green);font-weight:700}.warn{color:#a9321d;font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing a Message Queue</h1>
+          <div class="meta">
+            <span class="pill">Partitioned logs</span>
+            <span class="pill">Visibility leases</span>
+            <span class="pill">At-least-once</span>
+            <span class="pill">15 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we accept messages durably, deliver them to workers under bursty
+          load, and recover when consumers fail halfway through processing? The
+          design combines replicated append-only logs with leased delivery state.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#model">Queue semantics</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#storage">Storage model</a>
+            <a href="#produce">Produce path</a>
+            <a href="#consume">Consume path</a>
+            <a href="#ordering">Ordering</a>
+            <a href="#retries">Retries and DLQ</a>
+            <a href="#delays">Delayed messages</a>
+            <a href="#failures">Failure recovery</a>
+            <a href="#regions">Multi-region</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Decouple producers from consumers</h2>
+            <p>
+              Producers send messages to named queues. Consumer groups receive,
+              process, and acknowledge them. The queue absorbs bursts, retries
+              abandoned work, exposes backlog, and supports delayed delivery,
+              priorities, retention, and dead-letter handling.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Send, batch-send, receive, acknowledge, and reject</li>
+                  <li>Visibility timeout and lease extension</li>
+                  <li>Delayed delivery, retry policy, and dead-letter queues</li>
+                  <li>FIFO message groups and standard high-throughput queues</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>No acknowledged producer write silently lost</li>
+                  <li>At-least-once consumer delivery</li>
+                  <li>Millions of messages per second across queues</li>
+                  <li>Availability through broker and zone failure</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Scope distinction:</strong> a task queue removes or hides
+              work as consumers acknowledge it. A replayable event stream keeps
+              an immutable history and tracks offsets per subscriber. The storage
+              can be similar, but retention and delivery semantics differ.
+            </div>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">02 / CAPACITY</span>
+            <h2>Plan for burst rate and retained bytes</h2>
+            <p>
+              Assume 10 billion messages per day, a one-kilobyte average payload,
+              one million peak messages per second, three replicas, and seven days
+              of retention for unacknowledged or replayable data.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">116k/s</div>
+                <h3>average messages</h3>
+                <p>Peak load is roughly 8.6× higher.</p>
+              </div>
+              <div class="card">
+                <div class="metric">10 TB/day</div>
+                <h3>logical payload</h3>
+                <p>Before envelopes, indexes, and replication.</p>
+              </div>
+              <div class="card">
+                <div class="metric">210+ TB</div>
+                <h3>seven-day physical</h3>
+                <p>At three replicas before compression.</p>
+              </div>
+            </div>
+            <p>
+              Broker limits are driven by network and sequential disk bandwidth,
+              while queue count and inflight leases drive metadata memory. Large
+              payloads belong in object storage; messages should carry an immutable
+              reference and checksum rather than multi-megabyte bodies.
+            </p>
+          </section>
+
+          <section id="model">
+            <span class="section-number">03 / CONTRACT</span>
+            <h2>Choose delivery guarantees explicitly</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Guarantee</th><th>Behavior</th><th>Trade-off</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>At most once</strong></td>
+                  <td>Remove before processing or never retry</td>
+                  <td>No duplicates, but crashes lose messages</td>
+                </tr>
+                <tr>
+                  <td><strong>At least once</strong></td>
+                  <td>Retry until a valid acknowledgement arrives</td>
+                  <td>No silent loss, but handlers see duplicates</td>
+                </tr>
+                <tr>
+                  <td><strong>Exactly once</strong></td>
+                  <td>Coordinate queue state and business side effects</td>
+                  <td>Possible only within a shared transaction boundary</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              This design guarantees at-least-once delivery. Every message carries
+              a stable producer ID and idempotency key. Consumers record
+              <code>(consumer_name, message_id)</code> in the same transaction as
+              their business effect when duplicate effects are unacceptable.
+            </p>
+            <h3>Pull with long polling</h3>
+            <p>
+              Consumers issue a receive request that waits up to 20 seconds for a
+              batch. Pull naturally expresses consumer capacity, simplifies
+              firewalls, and supports backpressure. A streaming gRPC receive call
+              can reduce request overhead while preserving consumer flow control.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Separate control, storage, and delivery state</h2>
+            <div class="diagram" role="img" aria-label="Distributed message queue architecture">
+              <svg viewBox="0 0 1000 500" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="mq-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#mq-arrow)">
+                  <path d="M145 90H200"/>
+                  <path d="M330 90H390"/>
+                  <path d="M510 90H570"/>
+                  <path d="M690 90H750"/>
+                  <path d="M630 125V200"/>
+                  <path d="M690 235H750"/>
+                  <path d="M810 270V335"/>
+                  <path d="M750 370H690"/>
+                  <path d="M570 370H510"/>
+                  <path d="M450 335V125"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#mq-arrow)">
+                  <path d="M270 335V125"/>
+                  <path d="M450 405V440H630V270"/>
+                  <path d="M870 90H930"/>
+                  <path d="M870 235H930"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="55" width="120" height="70" rx="11"/>
+                  <rect x="200" y="55" width="130" height="70" rx="11" stroke="#a75528"/>
+                  <rect x="390" y="55" width="120" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="570" y="55" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="750" y="55" width="120" height="70" rx="11"/>
+                  <rect x="570" y="200" width="120" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="750" y="200" width="120" height="70" rx="11"/>
+                  <rect x="930" y="55" width="60" height="70" rx="11"/>
+                  <rect x="930" y="200" width="60" height="70" rx="11"/>
+                  <rect x="750" y="335" width="120" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="570" y="335" width="120" height="70" rx="11" stroke="#a75528"/>
+                  <rect x="390" y="335" width="120" height="70" rx="11"/>
+                  <rect x="200" y="335" width="140" height="70" rx="11" stroke="#285f8f"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="96">Producers</text>
+                  <text x="265" y="81" fill="#713817">Queue API</text>
+                  <text x="265" y="99" fill="#713817">gateway</text>
+                  <text x="450" y="81" fill="#176b55">Partition</text>
+                  <text x="450" y="99" fill="#176b55">leader</text>
+                  <text x="630" y="81" fill="#74519b">Replica A</text>
+                  <text x="810" y="96">Replica B</text>
+                  <text x="630" y="226" fill="#74519b">Segment +</text>
+                  <text x="630" y="244" fill="#74519b">lease state</text>
+                  <text x="810" y="226">Delivery</text>
+                  <text x="810" y="244">coordinator</text>
+                  <text x="960" y="96">disk</text>
+                  <text x="960" y="226">disk</text>
+                  <text x="810" y="361" fill="#285f8f">Consumers</text>
+                  <text x="810" y="379" fill="#285f8f">long poll</text>
+                  <text x="630" y="361" fill="#713817">Retry + delay</text>
+                  <text x="630" y="379" fill="#713817">timing wheel</text>
+                  <text x="450" y="361">Dead-letter</text>
+                  <text x="450" y="379">queue</text>
+                  <text x="270" y="361" fill="#285f8f">Raft metadata</text>
+                  <text x="270" y="379" fill="#285f8f">controllers</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="560" y="155">replicated append path</text>
+                  <text x="590" y="465">delivery, retries, and dead-letter movement branch from the durable log</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Partition leaders replicate append-only segments before acknowledging;
+                delivery coordinators lease committed entries to consumer groups.
+              </p>
+            </div>
+          </section>
+
+          <section id="storage">
+            <span class="section-number">05 / STORAGE</span>
+            <h2>Use append-only segments plus compact state</h2>
+            <pre>MessageRecord {
+  queue_id
+  partition_id
+  offset
+  message_id
+  producer_id
+  idempotency_key
+  available_at
+  priority
+  payload_or_blob_ref
+  checksum
+  created_at
+}</pre>
+            <p>
+              Each partition is a replicated append-only log split into immutable
+              segment files. Sequential writes maximize disk throughput. A sparse
+              offset index locates records; checksums detect corruption. Active
+              segment tails and indexes remain in page cache.
+            </p>
+            <p>
+              Per consumer group, maintain a compact acknowledgement bitmap or
+              range set, an inflight lease table, and a ready cursor. A segment can
+              be deleted when every required group has acknowledged it and the
+              retention floor has passed. Old retained segments may move to S3.
+            </p>
+            <div class="callout">
+              <strong>Do not rewrite a message to update its state.</strong>
+              Message bytes remain immutable. Acknowledgements, leases, retries,
+              and dead-letter transitions are small replicated state records that
+              reference the original offset.
+            </div>
+          </section>
+
+          <section id="produce">
+            <span class="section-number">06 / PRODUCERS</span>
+            <h2>Acknowledge only after quorum persistence</h2>
+            <ol class="steps">
+              <li>
+                <strong>Authenticate and validate.</strong> Enforce queue ACL,
+                producer quota, payload limit, schema, and retention policy.
+              </li>
+              <li>
+                <strong>Choose a partition.</strong> Hash the ordering key when
+                supplied; otherwise use a load-aware round-robin partitioner.
+              </li>
+              <li>
+                <strong>Deduplicate.</strong> The leader remembers recent producer
+                sequence numbers or idempotency keys within a bounded window.
+              </li>
+              <li>
+                <strong>Append and replicate.</strong> Write the record to the
+                leader log and replicate it to followers in other zones.
+              </li>
+              <li>
+                <strong>Commit and respond.</strong> After a quorum persists the
+                record, return message ID, partition, and offset.
+              </li>
+            </ol>
+            <pre>POST /v1/queues/email/messages
+Idempotency-Key: 0199fa2e-...
+{
+  "group_key": "customer_842",
+  "delay_seconds": 0,
+  "payload": { "template": "receipt", "order_id": "ord_17" }
+}</pre>
+            <p>
+              Batch adjacent messages into one request and one disk flush. Apply
+              producer backpressure before broker memory fills: reject with a
+              retryable error or block within a strict deadline when quotas,
+              replication lag, or disk latency exceed safe bounds.
+            </p>
+          </section>
+
+          <section id="consume">
+            <span class="section-number">07 / CONSUMERS</span>
+            <h2>Lease messages with receipt tokens</h2>
+            <ol class="steps">
+              <li>
+                A consumer long-polls with group name, batch size, and maximum
+                processing time.
+              </li>
+              <li>
+                The coordinator chooses visible committed messages and atomically
+                records leases with deadlines and random receipt tokens.
+              </li>
+              <li>
+                The consumer processes each message and acknowledges using the
+                current receipt token—not only the message ID.
+              </li>
+              <li>
+                A valid acknowledgement marks the group offset complete. A stale
+                token from an expired worker is rejected.
+              </li>
+              <li>
+                An expired lease increments delivery count and returns the message
+                to ready state or schedules a retry.
+              </li>
+            </ol>
+            <pre>ReceiveResponse {
+  message_id: "msg_..."
+  receipt_token: "random-per-delivery-token"
+  delivery_count: 3
+  lease_until: "2026-09-22T22:15:30Z"
+  payload: ...
+}</pre>
+            <p>
+              Workers may extend visibility before a long operation expires. Cap
+              total lease duration so a stuck consumer cannot hide work forever.
+              Deleting or acknowledging must be idempotent for the same valid token.
+            </p>
+          </section>
+
+          <section id="ordering">
+            <span class="section-number">08 / ORDERING</span>
+            <h2>Order by partition or message group</h2>
+            <p>
+              A partition leader assigns a total append order. With several
+              partitions, the queue has no global order. This is usually desirable:
+              throughput scales with partitions and unrelated work proceeds independently.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Standard queue</h3>
+                <p>
+                  Deliver any visible message. Retries may reorder work, maximizing
+                  throughput and availability.
+                </p>
+              </div>
+              <div class="card">
+                <h3>FIFO message groups</h3>
+                <p>
+                  Hash each group to one partition and allow only one inflight
+                  message per group. Different groups still run in parallel.
+                </p>
+              </div>
+            </div>
+            <p>
+              Strict queue-wide FIFO requires one partition and one inflight
+              message, turning the queue into a bottleneck. Expose ordering groups
+              so callers pay serialization only where business semantics require it.
+            </p>
+          </section>
+
+          <section id="retries">
+            <span class="section-number">09 / POISON WORK</span>
+            <h2>Retry without blocking healthy messages</h2>
+            <p>
+              On explicit failure or lease expiry, calculate exponential backoff
+              with full jitter and place the offset into the delayed-delivery index.
+              Other messages continue even if one item repeatedly fails.
+            </p>
+            <pre>delay = random(0, min(max_delay, base × 2^delivery_count))</pre>
+            <p>
+              After the configured attempt count or a permanent error, atomically
+              append a dead-letter envelope containing the original queue, offset,
+              failure reason, and delivery history. Mark the original terminal for
+              that consumer group only after the DLQ append commits.
+            </p>
+            <p>
+              Redrive creates a new delivery attempt while preserving the original
+              message ID and idempotency identity. Operators can filter by error
+              class and task version instead of replaying every poison message.
+            </p>
+          </section>
+
+          <section id="delays">
+            <span class="section-number">10 / TIME</span>
+            <h2>Index future availability separately</h2>
+            <p>
+              Keep messages delayed for hours or days in a durable due-time index
+              partitioned by minute and shard. Coordinators prefetch a short horizon
+              into an in-memory hierarchical timing wheel. When due, an offset
+              becomes visible in its queue partition.
+            </p>
+            <p>
+              This avoids scanning the entire log for <code>available_at ≤ now</code>
+              and prevents long-delay timers from consuming broker heap. The wheel
+              is disposable; after restart it rebuilds from durable time buckets
+              with an overlap window so no due item is skipped.
+            </p>
+            <p>
+              Priority queues maintain a small number of classes—such as urgent,
+              normal, and bulk—rather than an unbounded numeric heap. Weighted
+              scheduling prevents bulk starvation while reserving capacity for
+              urgent traffic.
+            </p>
+          </section>
+
+          <section id="failures">
+            <span class="section-number">11 / RECOVERY</span>
+            <h2>Make broker and consumer crashes ordinary</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Failure</th><th>Recovery</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Leader fails before quorum commit</td><td>Producer retries; new leader discards uncommitted tail</td></tr>
+                <tr><td>Leader fails after commit, before response</td><td>Producer retries same idempotency key and receives original result</td></tr>
+                <tr><td>Consumer dies during processing</td><td>Visibility lease expires and another consumer receives the message</td></tr>
+                <tr><td>Acknowledgement response is lost</td><td>Duplicate delivery occurs; consumer idempotency suppresses duplicate effects</td></tr>
+                <tr><td>Disk corruption</td><td>Checksum fails, replica is quarantined, and segment is copied from a healthy peer</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Metadata controllers use Raft for queue definitions, partition
+              assignments, replica epochs, ACLs, and quotas. Data partitions use
+              their own replication groups, so a control-plane leader failure does
+              not stop already-routed produce and consume traffic.
+            </p>
+            <h3>Rebalancing</h3>
+            <p>
+              Add a follower on the target broker, stream immutable segments,
+              catch up the active tail, then transfer leadership with a higher
+              epoch. Remove the old replica only after the new set is healthy.
+              Rate-limit movement to protect foreground latency.
+            </p>
+          </section>
+
+          <section id="regions">
+            <span class="section-number">12 / MULTI-REGION</span>
+            <h2>Give each queue a home region</h2>
+            <p>
+              Replicate synchronously across availability zones inside one home
+              region. Cross-region quorum writes add large latency and sacrifice
+              availability during partitions. Mirror committed segments and queue
+              metadata asynchronously to a disaster-recovery region.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Regional task queues</h3>
+                <p>
+                  Producers target the queue nearest its workers. Applications
+                  create separate queues when work may execute independently by region.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Global ordered queue</h3>
+                <p>
+                  Route all writes for an ordering key to one home region and
+                  accept the extra network hop. Do not merge independent leaders.
+                </p>
+              </div>
+            </div>
+            <p>
+              Disaster failover fences the previous region, promotes a known
+              replicated offset, and reissues inflight messages because lease state
+              may be stale. At-least-once semantics make those duplicates expected.
+            </p>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">13 / IMPLEMENTATION</span>
+            <h2>Recommended technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Brokers and coordinators</td><td><strong>Rust + Tokio</strong></td><td>Memory safety and efficient network and disk concurrency</td></tr>
+                <tr><td>Client protocol</td><td><strong>gRPC + HTTP</strong></td><td>Streaming receive, deadlines, batching, and broad compatibility</td></tr>
+                <tr><td>Metadata consensus</td><td><strong>OpenRaft + RocksDB</strong></td><td>Replicated controller state and local durable indexes</td></tr>
+                <tr><td>Hot message log</td><td><strong>NVMe + XFS</strong></td><td>High sequential throughput and mature local storage</td></tr>
+                <tr><td>Tiered retention</td><td><strong>Amazon S3</strong></td><td>Low-cost immutable segment retention and disaster recovery</td></tr>
+                <tr><td>Membership</td><td><strong>etcd</strong></td><td>Small service-discovery and configuration state—not message data</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Lag, lease, replication, disk, and delivery SLOs</td></tr>
+              </tbody>
+            </table>
+            <h3>Build or use an existing system?</h3>
+            <table class="decision">
+              <thead>
+                <tr><th>Product</th><th>Choose it when</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Amazon SQS</strong></td><td>You need a managed task queue with visibility timeouts and DLQs</td></tr>
+                <tr><td><strong>RabbitMQ</strong></td><td>You need flexible exchanges, routing, and moderate-scale low-latency queues</td></tr>
+                <tr><td><strong>Apache Kafka</strong></td><td>You need replayable event streams, many subscribers, and partition ordering</td></tr>
+                <tr><td><strong>Apache Pulsar</strong></td><td>You need queue and stream semantics with built-in tiered storage and many topics</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Prefer a mature managed system unless custom queue semantics,
+              isolation, or economics justify building brokers. The architecture
+              here explains the mechanisms behind those systems; it is not a reason
+              to replace them casually.
+            </p>
+            <h3>Production signals</h3>
+            <ul>
+              <li>Produce, visible-to-receive, and end-to-end acknowledgement latency</li>
+              <li>Ready, inflight, delayed, retried, and dead-letter message counts</li>
+              <li>Partition skew, replica lag, quorum health, and leader elections</li>
+              <li>Consumer utilization, lease expiry, duplicate delivery, and redrive rate</li>
+              <li>Disk utilization, flush latency, segment corruption, and tiering backlog</li>
+              <li>Quota rejection, payload size, and producer backpressure duration</li>
+            </ul>
+            <h3>Final design summary</h3>
+            <p>
+              Partition leaders append immutable message records and replicate them
+              across zones before acknowledgement. Delivery coordinators lease
+              committed offsets to long-polling consumers with receipt tokens.
+              Expired leases create at-least-once retries; idempotency protects side
+              effects. Timing wheels manage near-term delays, durable time buckets
+              hold long delays, and poison messages move atomically to DLQs.
+              Raft-replicated metadata, tiered segments, fenced failover, and
+              home-region ownership keep the system scalable and recoverable.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>
