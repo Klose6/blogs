@@ -1,0 +1,984 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A source-guided explanation of FoundationDB distributed transactions using a cross-shard account transfer.">
+  <title>FoundationDB Distributed Transactions</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #f6f8fa;
+      --surface-strong: #eaeef2;
+      --border: #d0d7de;
+      --text: #24292f;
+      --heading: #1f2328;
+      --muted: #57606a;
+      --accent: #0969da;
+      --accent-soft: rgba(9, 105, 218, 0.1);
+      --success: #1a7f37;
+      --warning: #9a6700;
+      --sidebar-width: 280px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      bottom: 0;
+      left: 0;
+      overflow-y: auto;
+      padding: 1.5rem 1rem;
+      position: fixed;
+      top: 0;
+      width: var(--sidebar-width);
+    }
+
+    .sidebar-brand {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: 1.05rem;
+      font-weight: 750;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.8rem;
+    }
+
+    .nav-list {
+      list-style: none;
+    }
+
+    .nav-link {
+      border-radius: 6px;
+      color: var(--text);
+      display: block;
+      font-size: 0.88rem;
+      padding: 0.4rem 0.6rem;
+      text-decoration: none;
+    }
+
+    .nav-link:hover {
+      background: var(--surface-strong);
+      color: var(--accent);
+    }
+
+    .nav-sublink {
+      font-size: 0.82rem;
+      padding-left: 1.4rem;
+    }
+
+    .content {
+      flex: 1;
+      margin-left: var(--sidebar-width);
+      max-width: 1000px;
+      min-width: 0;
+      padding: 2.5rem 3rem 4rem;
+    }
+
+    .header-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 1rem;
+    }
+
+    .home-link {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 650;
+      padding: 0.4rem 0.8rem;
+      text-decoration: none;
+    }
+
+    .home-link:hover {
+      background: var(--surface-strong);
+      color: var(--accent);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 750;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.55rem;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: clamp(1.72rem, 3vw, 2.2rem);
+      line-height: 1.2;
+      margin-bottom: 1rem;
+      padding-bottom: 0.6rem;
+      white-space: nowrap;
+    }
+
+    h2 {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: 1.48rem;
+      line-height: 1.3;
+      margin: 2.7rem 0 1rem;
+      padding-bottom: 0.42rem;
+    }
+
+    h3 {
+      color: var(--heading);
+      font-size: 1.12rem;
+      line-height: 1.35;
+      margin: 1.65rem 0 0.65rem;
+    }
+
+    p {
+      margin-bottom: 1rem;
+    }
+
+    ul, ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    li {
+      margin-bottom: 0.35rem;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      background: var(--accent-soft);
+      border-radius: 4px;
+      font-size: 0.88em;
+      padding: 0.12rem 0.34rem;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.86rem;
+      line-height: 1.55;
+      margin: 1rem 0 1.25rem;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    pre code {
+      background: transparent;
+      padding: 0;
+    }
+
+    blockquote {
+      background: var(--surface);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 7px 7px 0;
+      margin: 1.1rem 0;
+      padding: 0.9rem 1.1rem;
+    }
+
+    .lead {
+      font-size: 1.07rem;
+      max-width: 830px;
+    }
+
+    .callout {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      padding: 1rem 1.1rem;
+    }
+
+    .callout.warning {
+      background: #fff8c5;
+      border-color: #d4a72c;
+    }
+
+    .card-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 1.2rem 0;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    .diagram svg {
+      display: block;
+      height: auto;
+      min-width: 760px;
+      width: 100%;
+    }
+
+    .diagram .box {
+      fill: #ffffff;
+      stroke: #d0d7de;
+      stroke-width: 2;
+    }
+
+    .diagram .box-accent {
+      fill: #ddf4ff;
+      stroke: #0969da;
+      stroke-width: 2;
+    }
+
+    .diagram .box-log {
+      fill: #dafbe1;
+      stroke: #1a7f37;
+      stroke-width: 2;
+    }
+
+    .diagram .label {
+      fill: #1f2328;
+      font-size: 14px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+
+    .diagram .small {
+      fill: #57606a;
+      font-size: 11px;
+      text-anchor: middle;
+    }
+
+    .diagram .edge {
+      fill: none;
+      marker-end: url(#arrow);
+      stroke: #0969da;
+      stroke-width: 2;
+    }
+
+    .diagram .edge-log {
+      fill: none;
+      marker-end: url(#arrow-green);
+      stroke: #1a7f37;
+      stroke-width: 2;
+    }
+
+    .diagram .edge-dashed {
+      fill: none;
+      marker-end: url(#arrow-muted);
+      stroke: #57606a;
+      stroke-dasharray: 6 5;
+      stroke-width: 1.5;
+    }
+
+    .timeline {
+      border-left: 2px solid var(--border);
+      list-style: none;
+      margin-left: 0.65rem;
+      padding-left: 1.55rem;
+    }
+
+    .timeline > li {
+      margin-bottom: 1.4rem;
+      position: relative;
+    }
+
+    .timeline > li::before {
+      background: var(--accent);
+      border: 3px solid var(--bg);
+      border-radius: 50%;
+      content: "";
+      height: 13px;
+      left: -2.02rem;
+      position: absolute;
+      top: 0.3rem;
+      width: 13px;
+    }
+
+    .timeline h3 {
+      margin: 0 0 0.45rem;
+    }
+
+    .table-wrap {
+      margin-bottom: 1.4rem;
+      overflow-x: auto;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.68rem 0.82rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface);
+      color: var(--heading);
+      font-weight: 700;
+    }
+
+    tr:nth-child(even) {
+      background: #fbfcfd;
+    }
+
+    .status {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 750;
+      padding: 0.1rem 0.48rem;
+    }
+
+    .source-list {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .source-list li {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      margin-bottom: 0.65rem;
+      padding: 0.78rem 0.9rem;
+    }
+
+    .source-list code {
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 2.4rem 0 1.2rem;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        border-bottom: 1px solid var(--border);
+        border-right: 0;
+        padding: 1rem 1.5rem;
+        position: relative;
+        width: 100%;
+      }
+
+      .sidebar-brand {
+        border: 0;
+        margin: 0;
+        padding: 0;
+      }
+
+      .nav-list {
+        display: none;
+      }
+
+      .content {
+        margin-left: 0;
+        max-width: none;
+        padding: 1.5rem;
+      }
+    }
+
+    @media (max-width: 700px) {
+      h1 {
+        white-space: normal;
+      }
+
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-brand">FoundationDB Transactions</div>
+    <ul class="nav-list">
+      <li><a class="nav-link" href="#overview">1. Mental Model</a></li>
+      <li><a class="nav-link" href="#example">2. Transfer Example</a></li>
+      <li><a class="nav-link" href="#components">3. Components</a></li>
+      <li><a class="nav-link nav-sublink" href="#architecture">Architecture Graph</a></li>
+      <li><a class="nav-link" href="#lifecycle">4. Transaction Lifecycle</a></li>
+      <li><a class="nav-link nav-sublink" href="#conflict-check">Conflict Checking</a></li>
+      <li><a class="nav-link nav-sublink" href="#durability">TLog Durability</a></li>
+      <li><a class="nav-link" href="#visibility">5. Atomic Visibility</a></li>
+      <li><a class="nav-link" href="#conflicts">6. Conflict Semantics</a></li>
+      <li><a class="nav-link" href="#failures">7. Failures & Retries</a></li>
+      <li><a class="nav-link" href="#code-map">8. Source Code Map</a></li>
+      <li><a class="nav-link" href="#misconceptions">9. Misconceptions</a></li>
+      <li><a class="nav-link" href="#references">References</a></li>
+    </ul>
+  </aside>
+
+  <main class="content">
+    <div class="header-actions">
+      <a class="home-link" href="index.html">All articles</a>
+    </div>
+
+    <header>
+      <div class="eyebrow">Distributed databases · internals</div>
+      <h1>FoundationDB Distributed Transactions</h1>
+      <p class="lead">How FoundationDB atomically transfers $100 across two storage-server shards using a consistent read version, client-side write buffering, optimistic conflict ranges, commit proxies, resolvers, a global commit version, and replicated transaction logs.</p>
+    </header>
+
+    <section id="overview">
+      <h2>1. The Mental Model</h2>
+      <p>FoundationDB separates the transaction system from the storage system. Clients read versioned data directly from storage servers, but all writes flow through a transaction system that orders transactions, detects conflicts, and durably appends committed mutations to replicated transaction logs.</p>
+
+      <div class="callout">
+        <strong>The central idea:</strong> a client reads a stable snapshot, buffers mutations locally, and submits one commit request. Resolvers validate optimistic conflict ranges. If validation succeeds, both sides of the transfer receive one commit version and become durable together in the TLog system.
+      </div>
+
+      <div class="card-grid">
+        <article class="card">
+          <h3>Strict serializability</h3>
+          <p>Ordinary transactions observe a consistent database version and use read/write conflict ranges so concurrent outcomes can be ordered as if transactions executed one at a time.</p>
+        </article>
+        <article class="card">
+          <h3>Optimistic concurrency</h3>
+          <p>Resolvers do not lock Alice or Bob during the transaction. At commit, they compare the transaction's read ranges with writes committed after its read version.</p>
+        </article>
+        <article class="card">
+          <h3>Unbundled durability</h3>
+          <p>Commit acknowledgement waits for the replicated TLog system, not for every storage server to persist its shard. Storage servers apply the durable log stream asynchronously.</p>
+        </article>
+        <article class="card">
+          <h3>Versioned visibility</h3>
+          <p>Both mutations share a commit version. A read at that version waits for each selected shard to catch up, preventing a reader from observing only half of the transfer.</p>
+        </article>
+      </div>
+
+      <blockquote>
+        FoundationDB's commit path is not two-phase commit across storage shards. Storage servers do not prepare, vote, or participate synchronously in commit.
+      </blockquote>
+    </section>
+
+    <section id="example">
+      <h2>2. Example: Transfer $100 Across Two Shards</h2>
+      <p>Assume Alice's balance key is stored on Storage Shard A, Bob's balance key is stored on Storage Shard B, and the small transfer marker is colocated with Shard A. The transaction uses a stable transfer ID so an unknown commit result can be retried safely.</p>
+
+      <pre><code>transaction transfer("TX-42", 100):
+    if GET("transfers/TX-42") exists:
+        return "already applied"
+
+    alice = GET("accounts/alice")  // Storage Shard A
+    bob   = GET("accounts/bob")    // Storage Shard B
+
+    if alice &lt; 100:
+        abort "insufficient funds"
+
+    SET("accounts/alice", alice - 100)
+    SET("accounts/bob",   bob + 100)
+    SET("transfers/TX-42", "complete")
+
+    COMMIT</code></pre>
+
+      <p>The transaction preserves two invariants: Alice cannot overdraw based on the snapshot it read, and the debit, credit, and completion marker commit atomically. Ordinary reads add read conflict ranges; the three writes add write conflict ranges.</p>
+
+      <div class="callout warning">
+        <strong>Why the transfer ID matters:</strong> after <code>commit_unknown_result</code>, the client cannot know whether the old attempt committed. Retrying with the same ID lets one transaction check the marker and either return safely or perform the transfer once.
+      </div>
+    </section>
+
+    <section id="components">
+      <h2>3. Components on the Transaction Path</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Responsibility</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Client library</strong></td>
+              <td>Obtains a read version, routes reads to storage servers, overlays read-your-writes, buffers mutations and conflict ranges, sends commit, and runs retry logic.</td>
+            </tr>
+            <tr>
+              <td><strong>GRV proxy</strong></td>
+              <td>Supplies a live database read version and participates in admission control. “GRV” means get read version.</td>
+            </tr>
+            <tr>
+              <td><strong>Commit proxy</strong></td>
+              <td>Batches commit requests, obtains a commit version, fans conflict ranges out to resolvers, tags mutations for storage teams, pushes the log system, and replies to clients.</td>
+            </tr>
+            <tr>
+              <td><strong>Master / sequencer</strong></td>
+              <td>Allocates monotonically increasing versions and tracks the transaction-system generation. The paper calls this role the Sequencer; current source still uses historical Master naming.</td>
+            </tr>
+            <tr>
+              <td><strong>Resolvers</strong></td>
+              <td>Partition conflict ranges and hold recent in-memory write history. They decide whether a transaction's reads conflict with newer committed writes.</td>
+            </tr>
+            <tr>
+              <td><strong>TLogs / log system</strong></td>
+              <td>Durably replicate the ordered, tagged mutation stream. Their acknowledgement is the commit durability point.</td>
+            </tr>
+            <tr>
+              <td><strong>Storage servers</strong></td>
+              <td>Own key-range shards, serve MVCC reads, pull tagged mutations from TLogs, apply them in version order, and persist/coalesce them asynchronously.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="architecture">Architecture Graph</h3>
+      <p>The read and commit paths branch differently. Reads bypass commit proxies, while commit flows through resolvers and TLogs before storage servers consume the durable mutations.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 700" role="img" aria-labelledby="diagram-title diagram-description">
+          <title id="diagram-title">FoundationDB cross-shard transaction architecture</title>
+          <desc id="diagram-description">The client gets a read version from a GRV proxy and reads Alice and Bob from separate storage servers. It sends one commit request to a commit proxy, which gets a version from the sequencer, checks conflicts at resolvers, and writes both mutations to replicated TLogs. Storage servers later pull their tagged mutations.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+            <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#1a7f37"></path>
+            </marker>
+            <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#57606a"></path>
+            </marker>
+          </defs>
+
+          <rect class="box-accent" x="345" y="20" rx="8" width="250" height="68"></rect>
+          <text class="label" x="470" y="47">Client transaction</text>
+          <text class="small" x="470" y="66">RYW cache · buffered writes · conflict ranges</text>
+
+          <rect class="box" x="55" y="145" rx="8" width="210" height="65"></rect>
+          <text class="label" x="160" y="171">GRV proxy</text>
+          <text class="small" x="160" y="190">returns read version R</text>
+
+          <rect class="box-accent" x="365" y="145" rx="8" width="210" height="65"></rect>
+          <text class="label" x="470" y="171">Commit proxy</text>
+          <text class="small" x="470" y="190">batch · resolve · tag · log</text>
+
+          <rect class="box" x="675" y="145" rx="8" width="210" height="65"></rect>
+          <text class="label" x="780" y="171">Master / sequencer</text>
+          <text class="small" x="780" y="190">read and commit versions</text>
+
+          <rect class="box" x="185" y="300" rx="8" width="210" height="68"></rect>
+          <text class="label" x="290" y="327">Resolver 1</text>
+          <text class="small" x="290" y="346">Alice conflict ranges</text>
+
+          <rect class="box" x="545" y="300" rx="8" width="210" height="68"></rect>
+          <text class="label" x="650" y="327">Resolver 2</text>
+          <text class="small" x="650" y="346">Bob conflict ranges</text>
+
+          <rect class="box-log" x="350" y="440" rx="8" width="240" height="72"></rect>
+          <text class="label" x="470" y="468">Replicated TLog system</text>
+          <text class="small" x="470" y="488">durable version V + tagged mutations</text>
+
+          <rect class="box" x="80" y="590" rx="8" width="260" height="72"></rect>
+          <text class="label" x="210" y="618">Storage Shard A</text>
+          <text class="small" x="210" y="638">Alice = 900 @ V</text>
+
+          <rect class="box" x="600" y="590" rx="8" width="260" height="72"></rect>
+          <text class="label" x="730" y="618">Storage Shard B</text>
+          <text class="small" x="730" y="638">Bob = 600 @ V</text>
+
+          <path class="edge" d="M390 88 C320 110 230 115 175 145"></path>
+          <path class="edge" d="M470 88 L470 145"></path>
+          <path class="edge" d="M705 145 C650 110 610 105 550 88"></path>
+          <path class="edge" d="M575 177 L675 177"></path>
+          <path class="edge" d="M430 210 C390 250 340 265 300 300"></path>
+          <path class="edge" d="M510 210 C550 250 600 265 640 300"></path>
+          <path class="edge-log" d="M350 368 C380 405 415 410 445 440"></path>
+          <path class="edge-log" d="M590 368 C560 405 525 410 495 440"></path>
+          <path class="edge-log" d="M425 512 C370 545 285 555 225 590"></path>
+          <path class="edge-log" d="M515 512 C570 545 655 555 715 590"></path>
+
+          <path class="edge-dashed" d="M365 64 C235 85 170 470 200 590"></path>
+          <path class="edge-dashed" d="M575 64 C705 85 770 470 740 590"></path>
+
+          <text class="small" x="270" y="111">get read version</text>
+          <text class="small" x="470" y="119">one commit request</text>
+          <text class="small" x="625" y="163">get commit version V</text>
+          <text class="small" x="296" y="417">admit / conflict</text>
+          <text class="small" x="644" y="417">admit / conflict</text>
+          <text class="small" x="270" y="563">pull Alice tag</text>
+          <text class="small" x="670" y="563">pull Bob tag</text>
+          <text class="small" x="103" y="389">direct read @ R</text>
+          <text class="small" x="837" y="389">direct read @ R</text>
+        </svg>
+      </figure>
+    </section>
+
+    <section id="lifecycle">
+      <h2>4. Step-by-Step Transaction Lifecycle</h2>
+      <ol class="timeline">
+        <li>
+          <h3>Get one read version</h3>
+          <p>The first database read lazily asks a GRV proxy for a live committed version, <code>R</code>. Every storage read in this transaction uses that same version. This creates a consistent snapshot even though Alice and Bob live on unrelated shards.</p>
+        </li>
+        <li>
+          <h3>Read the storage servers directly</h3>
+          <p>The client library resolves each key's shard location and load-balances reads to storage-server replicas. If a chosen replica has not applied version <code>R</code>, it waits or the client retries another replica. Reads do not pass through a commit proxy.</p>
+        </li>
+        <li>
+          <h3>Buffer mutations and conflicts in the client</h3>
+          <p><code>SET</code> does not immediately contact a storage shard. The client records mutations in its read-your-writes layer and overlays them on later reads. Ordinary reads and writes produce ranges similar to:</p>
+          <pre><code>read conflict ranges:
+  ["accounts/alice", keyAfter("accounts/alice"))
+  ["accounts/bob",   keyAfter("accounts/bob"))
+  ["transfers/TX-42", keyAfter("transfers/TX-42"))
+
+write conflict ranges:
+  the same three key ranges
+
+mutations:
+  Alice = 900
+  Bob = 600
+  TX-42 = "complete"</code></pre>
+        </li>
+        <li>
+          <h3>Send one commit request</h3>
+          <p>The client submits the read version, buffered mutations, read conflict ranges, and write conflict ranges to one commit proxy. The proxy combines it with other requests in a short adaptive batch.</p>
+        </li>
+        <li>
+          <h3>Assign a commit version to the batch</h3>
+          <p>The commit proxy asks the master/sequencer for a new version, <code>V</code>, before resolver checking. Several transactions in one batch can share <code>V</code>; a transaction index provides ordering within that batch. A rejected transaction can therefore consume a version.</p>
+        </li>
+        <li id="conflict-check">
+          <h3>Check conflicts at every relevant resolver</h3>
+          <p>The proxy partitions conflict ranges by the resolver key-space map. A resolver rejects this transaction if a committed write after <code>R</code> overlaps one of its read conflict ranges. Alice's and Bob's ranges may be checked by different resolvers, and the proxy admits the transfer only if <strong>all</strong> relevant resolvers admit it.</p>
+          <div class="callout">
+            <strong>Conflict rule:</strong> a transaction reading at <code>R</code> conflicts when a write ordered after <code>R</code> but before this transaction overlaps one of its read conflict ranges. Resolvers compare ranges and versions—not values.
+          </div>
+        </li>
+        <li>
+          <h3>Tag mutations for destination storage teams</h3>
+          <p>The commit proxy uses its shard map to attach the Alice storage-team tag to the debit and the Bob storage-team tag to the credit. Both remain part of one versioned mutation stream; storage servers are not asked to prepare them.</p>
+        </li>
+        <li id="durability">
+          <h3>Push the mutation batch to replicated TLogs</h3>
+          <p>The log system durably appends the ordered mutations under version <code>V</code>. The proxy waits for the configured durable quorum in each applicable log set—not every TLog in the cluster and not the destination storage servers.</p>
+        </li>
+        <li>
+          <h3>Return commit success</h3>
+          <p>After TLog durability, the proxy reports the live committed version and returns <code>V</code> plus the transaction's batch index. Conflict returns <code>not_committed</code>; an unresolvable old read version returns <code>transaction_too_old</code>.</p>
+        </li>
+        <li>
+          <h3>Apply mutations asynchronously</h3>
+          <p>Storage servers continuously pull their tagged TLog streams, apply mutations in version order, and later persist/coalesce them into their storage engines. Old mutation-log entries and MVCC versions are removed as the durable and oldest-readable frontiers advance.</p>
+        </li>
+      </ol>
+
+      <h3>Commit Path at a Glance</h3>
+      <pre><code>CLIENT
+  ├─ get read version R ─────────────────────────▶ GRV proxy
+  ├─ read Alice @ R ─────────────────────────────▶ Storage Shard A
+  ├─ read Bob @ R ───────────────────────────────▶ Storage Shard B
+  └─ commit {R, conflicts, mutations} ───────────▶ Commit proxy
+                                                      │
+                         get version V ◀──────────────┤
+                         Resolver 1 + Resolver 2 ◀────┤
+                                                      │ all admit
+                                                      ▼
+                                             replicated TLogs
+                                                      │ durable
+                           success {V, batch index} ◀──┘
+                                                      │
+                                tagged log streams ───┴──▶ storage shards</code></pre>
+    </section>
+
+    <section id="visibility">
+      <h2>5. Why Readers Cannot See Half the Transfer</h2>
+      <p>Storage Shard A and Storage Shard B can physically apply version <code>V</code> at different wall-clock times. Atomicity comes from versioned reads and the durable global mutation order, not synchronized disk writes.</p>
+      <ol>
+        <li>A later transaction obtains a read version at or above <code>V</code>.</li>
+        <li>Its Alice read asks Shard A for that version; its Bob read asks Shard B for the same version.</li>
+        <li>If either shard is behind, that read waits until the shard has consumed the TLog stream through the requested version.</li>
+        <li>Once both return, the snapshot contains both mutations. A transaction reading an older version contains neither.</li>
+      </ol>
+      <p>During recovery, the transaction system establishes the durable committed prefix from TLogs. Storage servers can roll back speculative versions beyond that prefix before serving the new epoch.</p>
+    </section>
+
+    <section id="conflicts">
+      <h2>6. Conflict Semantics</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Conflict behavior</th>
+              <th>Transfer consequence</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Ordinary read</strong></td>
+              <td>Reads at <code>R</code> and adds a read conflict range.</td>
+              <td>Two read-modify-write transfers touching Alice cannot both commit from stale balances.</td>
+            </tr>
+            <tr>
+              <td><strong>Snapshot read</strong></td>
+              <td>Reads the same consistent snapshot but omits the read conflict range.</td>
+              <td>A newer overlapping write does not force this transaction to conflict. It is unsuitable for enforcing the no-overdraft check by itself.</td>
+            </tr>
+            <tr>
+              <td><strong>Set / clear</strong></td>
+              <td>Adds a mutation and a write conflict range, but a blind write has no implicit read range.</td>
+              <td>Two blind writers are not inherently rejected merely because their write ranges overlap; conflict detection is driven by read-versus-write overlap.</td>
+            </tr>
+            <tr>
+              <td><strong>Atomic operation</strong></td>
+              <td>Buffers a server-applied mutation without reading the old value, so the operation itself does not create a read conflict.</td>
+              <td>Atomic add/subtract can update counters without conflicts, but validating “Alice has at least $100” requires an ordinary read or explicit conflict protection.</td>
+            </tr>
+            <tr>
+              <td><strong>Read-your-writes</strong></td>
+              <td>The client overlays local buffered mutations on storage results; enabled by default, including for snapshot reads.</td>
+              <td>Code later in the same transaction sees the proposed balances before commit.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="failures">
+      <h2>7. Failures, Retries, and Unknown Results</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Result or failure</th>
+              <th>Meaning</th>
+              <th>Correct response</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>not_committed</code></td>
+              <td>A resolver detected a conflict; none of this transaction's mutations committed.</td>
+              <td>Retry the whole transaction with a fresh read version.</td>
+            </tr>
+            <tr>
+              <td><code>transaction_too_old</code></td>
+              <td>The resolver no longer retains enough recent conflict history to validate the old read version.</td>
+              <td>Retry from the beginning. The often-mentioned time window is approximate and configuration/version dependent.</td>
+            </tr>
+            <tr>
+              <td><code>commit_unknown_result</code></td>
+              <td>The request may have become durable, but the reply was lost or the transaction system changed epochs at the critical point.</td>
+              <td>Do not blindly repeat a non-idempotent action. Retry using the same external transfer ID and completion marker.</td>
+            </tr>
+            <tr>
+              <td>Storage-server failure after acknowledgement</td>
+              <td>The committed mutations remain in the replicated TLog system.</td>
+              <td>The system recruits or repairs storage replicas and replays the durable stream; the transfer is not undone.</td>
+            </tr>
+            <tr>
+              <td>Transaction-system / TLog failure</td>
+              <td>Recovery starts a new epoch and determines the durable committed prefix from surviving logs.</td>
+              <td>The client retries retryable errors. Storage servers roll back any speculative versions beyond the recovered prefix.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Safe Retry Pattern</h3>
+      <pre><code>transfer_id = generate_once_outside_retry_loop()
+
+retry:
+    tr = begin()
+    try:
+        if tr.get("transfers/" + transfer_id) == "complete":
+            return success
+
+        // ordinary reads establish conflict ranges
+        alice = tr.get("accounts/alice")
+        bob = tr.get("accounts/bob")
+
+        tr.set("accounts/alice", alice - 100)
+        tr.set("accounts/bob", bob + 100)
+        tr.set("transfers/" + transfer_id, "complete")
+        tr.commit()
+        return success
+    catch retryable_error as error:
+        tr.on_error(error)
+        goto retry</code></pre>
+    </section>
+
+    <section id="code-map">
+      <h2>8. Where This Lives in FoundationDB's Code</h2>
+      <p>These links use one source revision, <a href="https://github.com/apple/foundationdb/commit/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384"><code>f8e1e90</code></a>, so the implementation can be read consistently.</p>
+      <ul class="source-list">
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbclient/NativeAPI.cpp#L5640-L5727"><code>TransactionState::getReadVersion</code></a>
+          <div class="muted">Client read-version acquisition and transaction state.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbclient/NativeAPI.cpp#L1643-L1774"><code>getKeyLocation</code> and <code>getValue</code></a>
+          <div class="muted">Shard-location lookup and direct versioned reads from storage servers.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbclient/ReadYourWrites.cpp#L227-L400"><code>ReadYourWrites.cpp</code></a>
+          <div class="muted">Client-side mutation overlay and conflict-range handling.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbclient/NativeAPI.cpp#L4547-L4777"><code>tryCommit</code></a>
+          <div class="muted">Commit request construction, replies, and unknown-result handling.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/grvproxy/GrvProxyServer.cpp#L739-L862"><code>GrvProxyServer.cpp</code></a>
+          <div class="muted">Live committed read versions and GRV replies.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/sequencer/masterserver.cpp#L74-L145"><code>getVersion</code></a>
+          <div class="muted">Sequencer/master version allocation for commit batches.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/commitproxy/CommitProxyServer.cpp#L234-L279"><code>commitBatcher</code></a>
+          <div class="muted">Adaptive batching of client commit requests.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/commitproxy/CommitProxyServer.cpp#L936-L1020"><code>getResolution</code></a>
+          <div class="muted">Partitioning and dispatching conflict information to resolvers.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/resolver/Resolver.cpp#L263-L460"><code>resolveBatch</code></a>
+          <div class="muted">Resolver-side optimistic conflict detection and recent-write history.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/commitproxy/CommitProxyServer.cpp#L1389-L1582"><code>assignMutationsToStorageServers</code></a>
+          <div class="muted">Mapping each mutation to destination storage-team tags.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/logsystem/LogSystem.cpp#L841-L944"><code>LogSystem::push</code></a>
+          <div class="muted">Replicated log-system durability and quorum handling.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/tlog/TLogServer.cpp#L2759-L2823"><code>doQueueCommit</code></a>
+          <div class="muted">TLog persistent queue commit.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apple/foundationdb/blob/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384/fdbserver/storageserver/storageserver.cpp#L10274-L10729"><code>storageServer::update</code></a>
+          <div class="muted">Pulling tagged TLog mutations and applying them in version order.</div>
+        </li>
+      </ul>
+    </section>
+
+    <section id="misconceptions">
+      <h2>9. Corrections to Common Misconceptions</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Simplified claim</th>
+              <th>More accurate model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>“FoundationDB runs 2PC across storage shards.”</td>
+              <td>Storage servers do not prepare or vote. The transaction system resolves conflicts and durably appends one versioned mutation stream to TLogs.</td>
+            </tr>
+            <tr>
+              <td>“Commit waits for Alice and Bob's storage servers.”</td>
+              <td>Commit waits for required TLog durability. Storage servers consume and persist their tagged streams asynchronously.</td>
+            </tr>
+            <tr>
+              <td>“All reads pass through proxies.”</td>
+              <td>The client gets a read version from a GRV proxy, then reads key ranges directly from storage-server replicas.</td>
+            </tr>
+            <tr>
+              <td>“Calling <code>set()</code> writes the destination shard.”</td>
+              <td>The client buffers the mutation locally until commit.</td>
+            </tr>
+            <tr>
+              <td>“Resolvers compare account values or hold row locks.”</td>
+              <td>Resolvers keep recent in-memory conflict-range history and compare range intersections across versions.</td>
+            </tr>
+            <tr>
+              <td>“Every transaction gets a unique timestamp.”</td>
+              <td>A commit batch can share one version; transaction indices order transactions within that version.</td>
+            </tr>
+            <tr>
+              <td>“Snapshot read means latest or inconsistent data.”</td>
+              <td>It reads the same consistent transaction version but does not add an automatic read conflict range.</td>
+            </tr>
+            <tr>
+              <td>“The paper's process names exactly match current code.”</td>
+              <td>The paper uses Sequencer and Proxy as conceptual roles. Current code separates GRV and commit proxies, while sequencer implementation names still include <code>Master</code>.</td>
+            </tr>
+            <tr>
+              <td>“Current storage servers necessarily use SQLite.”</td>
+              <td>The 2021 paper describes that implementation. Current code supports storage-engine abstractions, so SQLite should not be treated as a timeless protocol requirement.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="references">
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://www.foundationdb.org/files/fdb-paper.pdf">FoundationDB: A Distributed Unbundled Transactional Key Value Store</a>, SIGMOD 2021.</li>
+        <li><a href="https://doi.org/10.1145/3448016.3457559">ACM paper record and DOI</a>.</li>
+        <li><a href="https://apple.github.io/foundationdb/architecture.html">Official FoundationDB architecture documentation</a>.</li>
+        <li><a href="https://apple.github.io/foundationdb/developer-guide.html">Official developer guide</a>—transactions, conflict ranges, retries, and unknown results.</li>
+        <li><a href="https://github.com/apple/foundationdb/wiki/Transaction-Commit-Path">FoundationDB transaction commit path notes</a>.</li>
+        <li><a href="https://github.com/apple/foundationdb/tree/f8e1e90a40a51b6d9b4dc110fde8ce4de975e384">FoundationDB source at <code>f8e1e90</code></a>.</li>
+      </ul>
+    </section>
+
+    <hr>
+    <p class="muted">Created October 5, 2026 · Based on the FoundationDB paper, official documentation, and source code linked above.</p>
+  </main>
+</body>
+</html>
