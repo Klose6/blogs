@@ -3,41 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CockroachDB Transaction & Clock Internals</title>
+  <title>CockroachDB Distributed Transactions</title>
   
   <!-- Modern System Typography & Styling -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" id="highlight-theme" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
-  
-  <!-- MathJax for LaTeX Rendering -->
-  <script>
-    MathJax = {
-      tex: {
-        inlineMath: [['$', '$'], ['\\(', '\\)']],
-        displayMath: [['$$', '$$'], ['\\[', '\\]']]
-      }
-    };
-  </script>
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
   <style>
     :root {
-      --bg-primary: #0d1117;
-      --bg-secondary: #161b22;
-      --bg-tertiary: #21262d;
-      --border-color: #30363d;
-      --text-primary: #c9d1d9;
-      --text-heading: #f0f6fc;
-      --accent: #58a6ff;
-      --accent-muted: rgba(56, 139, 253, 0.15);
-      --code-bg: #161b22;
-      --table-header-bg: #161b22;
-      --sidebar-width: 280px;
-    }
-
-    [data-theme="light"] {
       --bg-primary: #ffffff;
       --bg-secondary: #f6f8fa;
       --bg-tertiary: #eaeef2;
@@ -48,6 +22,7 @@
       --accent-muted: rgba(9, 105, 218, 0.15);
       --code-bg: #f6f8fa;
       --table-header-bg: #f6f8fa;
+      --sidebar-width: 280px;
     }
 
     * {
@@ -122,6 +97,7 @@
       margin-left: var(--sidebar-width);
       flex: 1;
       max-width: 960px;
+      min-width: 0;
       padding: 2.5rem 3rem;
     }
 
@@ -132,19 +108,20 @@
       margin-bottom: 1rem;
     }
 
-    .theme-toggle {
+    .home-link {
       background: var(--bg-secondary);
       color: var(--text-primary);
       border: 1px solid var(--border-color);
       padding: 0.4rem 0.8rem;
       border-radius: 6px;
-      cursor: pointer;
       font-size: 0.85rem;
       font-weight: 600;
+      text-decoration: none;
+    }
 
-      &:hover {
-        background: var(--bg-tertiary);
-      }
+    .home-link:hover {
+      background: var(--bg-tertiary);
+      color: var(--accent);
     }
 
     /* Typography */
@@ -248,8 +225,196 @@
       background-color: var(--bg-secondary);
     }
 
+    a {
+      color: var(--accent);
+    }
+
+    .header-actions {
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      margin-bottom: 0.6rem;
+      text-transform: uppercase;
+    }
+
+    .lead {
+      font-size: 1.08rem;
+      max-width: 820px;
+    }
+
+    .hero-title {
+      font-size: clamp(1.75rem, 3.1vw, 2.2rem);
+      white-space: nowrap;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1.2rem 0;
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .card h3 {
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .callout {
+      background: var(--accent-muted);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      padding: 1rem 1.1rem;
+    }
+
+    .callout strong:first-child {
+      color: var(--text-heading);
+    }
+
+    .diagram {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    .diagram svg {
+      display: block;
+      height: auto;
+      min-width: 720px;
+      width: 100%;
+    }
+
+    .diagram .box {
+      fill: var(--bg-tertiary);
+      stroke: var(--border-color);
+      stroke-width: 2;
+    }
+
+    .diagram .box-accent {
+      fill: var(--accent-muted);
+      stroke: var(--accent);
+      stroke-width: 2;
+    }
+
+    .diagram .label {
+      fill: var(--text-heading);
+      font-size: 14px;
+      font-weight: 650;
+      text-anchor: middle;
+    }
+
+    .diagram .small {
+      fill: var(--text-primary);
+      font-size: 11px;
+      font-weight: 400;
+      text-anchor: middle;
+    }
+
+    .diagram .edge {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2;
+      marker-end: url(#arrow);
+    }
+
+    .diagram .edge-muted {
+      fill: none;
+      stroke: var(--text-primary);
+      stroke-dasharray: 6 5;
+      stroke-width: 1.5;
+      marker-end: url(#arrow-muted);
+    }
+
+    .timeline {
+      border-left: 2px solid var(--border-color);
+      list-style: none;
+      margin-left: 0.7rem;
+      padding-left: 1.5rem;
+    }
+
+    .timeline li {
+      margin-bottom: 1.35rem;
+      position: relative;
+    }
+
+    .timeline li::before {
+      background: var(--accent);
+      border: 3px solid var(--bg-primary);
+      border-radius: 50%;
+      content: "";
+      height: 12px;
+      left: -1.95rem;
+      position: absolute;
+      top: 0.4rem;
+      width: 12px;
+    }
+
+    .timeline h3 {
+      margin: 0 0 0.4rem;
+    }
+
+    .timeline p:last-child {
+      margin-bottom: 0;
+    }
+
+    .status {
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-right: 0.25rem;
+      padding: 0.12rem 0.5rem;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .source-list {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .source-list li {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      margin-bottom: 0.65rem;
+      padding: 0.75rem 0.9rem;
+    }
+
+    .source-list code {
+      word-break: break-word;
+    }
+
+    .muted {
+      color: var(--text-primary);
+      font-size: 0.88rem;
+    }
+
     /* Responsive Adjustments */
-    @media (max-width: 768px) {
+    @media (max-width: 900px) {
       body {
         flex-direction: column;
       }
@@ -257,81 +422,512 @@
         width: 100%;
         position: relative;
         height: auto;
+        padding: 1rem 1.5rem;
+      }
+      .sidebar-brand {
+        border-bottom: 0;
+        margin-bottom: 0;
+        padding-bottom: 0;
+      }
+      .nav-list {
+        display: none;
       }
       .content-wrapper {
         margin-left: 0;
+        max-width: none;
         padding: 1.5rem;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+      .hero-title {
+        white-space: normal;
       }
     }
   </style>
 </head>
 <body>
 
-  <!-- Sidebar Navigation -->
   <aside class="sidebar">
-    <div class="sidebar-brand">CockroachDB Architecture</div>
+    <div class="sidebar-brand">CockroachDB Transactions</div>
     <ul class="nav-list">
-      <li class="nav-item"><a href="#hlc" class="nav-link">1. Hybrid Logical Clocks</a></li>
-      <li class="nav-item"><a href="#hlc-problem" class="nav-link nav-sublink">The Core Problem</a></li>
-      <li class="nav-item"><a href="#hlc-anatomy" class="nav-link nav-sublink">HLC Anatomy</a></li>
-      <li class="nav-item"><a href="#hlc-state-machine" class="nav-link nav-sublink">Update Rules</a></li>
-      <li class="nav-item"><a href="#hlc-bound" class="nav-link nav-sublink">Clock Drift Guard</a></li>
-      <li class="nav-item"><a href="#hlc-reads" class="nav-link nav-sublink">Read Uncertainty Window</a></li>
-
-      <li class="nav-item" style="margin-top: 1rem;"><a href="#dist-txn" class="nav-link">2. Cross-Range Transactions</a></li>
-      <li class="nav-item"><a href="#txn-arch" class="nav-link nav-sublink">Architecture Overview</a></li>
-      <li class="nav-item"><a href="#txn-steps" class="nav-link nav-sublink">Execution Lifecycle</a></li>
-      <li class="nav-item"><a href="#txn-read-conflict" class="nav-link nav-sublink">Concurrent Reader Resolution</a></li>
-      <li class="nav-item"><a href="#txn-aborts" class="nav-link nav-sublink">Conflicts & Aborts</a></li>
+      <li class="nav-item"><a href="#overview" class="nav-link">1. Mental Model</a></li>
+      <li class="nav-item"><a href="#example" class="nav-link">2. Transfer Example</a></li>
+      <li class="nav-item"><a href="#actors" class="nav-link">3. Components</a></li>
+      <li class="nav-item"><a href="#architecture" class="nav-link nav-sublink">Architecture Graph</a></li>
+      <li class="nav-item"><a href="#lifecycle" class="nav-link">4. Transaction Lifecycle</a></li>
+      <li class="nav-item"><a href="#parallel-commit" class="nav-link nav-sublink">Parallel Commit</a></li>
+      <li class="nav-item"><a href="#recovery" class="nav-link">5. Failure Recovery</a></li>
+      <li class="nav-item"><a href="#concurrency" class="nav-link">6. Concurrency</a></li>
+      <li class="nav-item"><a href="#time" class="nav-link">7. HLC & Read Refresh</a></li>
+      <li class="nav-item"><a href="#latency" class="nav-link">8. Fast Paths</a></li>
+      <li class="nav-item"><a href="#code-map" class="nav-link">9. Source Code Map</a></li>
+      <li class="nav-item"><a href="#corrections" class="nav-link">10. Common Misconceptions</a></li>
+      <li class="nav-item"><a href="#references" class="nav-link">References</a></li>
     </ul>
   </aside>
 
-  <!-- Main Content Area -->
   <main class="content-wrapper">
     <div class="header-actions">
-      <button class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Light Mode</button>
+      <a class="home-link" href="index.html">All articles</a>
     </div>
 
-    <h1>CockroachDB Deep Dive: Clocks & Distributed Transactions</h1>
-    <p>A comprehensive architectural reference detailing Hybrid Logical Clocks (HLC) and distributed cross-range transaction mechanics in CockroachDB.</p>
+    <header>
+      <div class="eyebrow">Distributed databases · internals</div>
+      <h1 class="hero-title">CockroachDB Distributed Transactions</h1>
+      <p class="lead">How a serializable transfer updates two key ranges atomically using MVCC, Hybrid Logical Clocks, Raft, write intents, write pipelining, and Parallel Commits—without requiring specialized atomic-clock hardware.</p>
+    </header>
 
-    <!-- SECTION 1: HLC -->
-    <section id="hlc">
-      <h2>1. Hybrid Logical Clocks (HLC)</h2>
-      <p><strong>Hybrid Logical Clocks (HLC)</strong> solve a fundamental challenge in distributed systems: how to assign monotonically increasing timestamps that reflect real-world physical time without relying on specialized hardware like atomic clocks or GPS receivers (such as Google Spanner's TrueTime).</p>
-      <p>CockroachDB uses HLCs to enforce causality, determine transaction ordering, and achieve <strong>Serializable</strong> isolation across distributed nodes using commodity NTP clock synchronization.</p>
+    <section id="overview">
+      <h2>1. The Mental Model</h2>
+      <p>CockroachDB separates two responsibilities. <strong>Raft</strong> makes each range's changes durable and replicated; the <strong>transaction protocol</strong> makes changes spanning several independently replicated ranges appear atomic. MVCC timestamps order versions, while intents and a transaction record connect provisional writes into one transaction.</p>
 
-      <h3 id="hlc-problem">The Core Problem HLC Solves</h3>
-      <p>To preserve causality, a clock implementation must strictly satisfy the <strong>Causality Requirement</strong>:</p>
-      $$\text{If Event } A \text{ happens before Event } B \quad (A \rightarrow B), \quad \text{then } L(A) < L(B)$$
-      
-      <p>Traditional clock mechanisms exhibit critical trade-offs:</p>
+      <div class="callout">
+        <strong>The central idea:</strong> data is first written as provisional MVCC values called <em>write intents</em>. A single transaction record determines whether all those intents are logically visible or must be discarded. Parallel Commits lets the final transaction record and outstanding intent writes reach Raft consensus at the same time.
+      </div>
+
+      <div class="card-grid">
+        <article class="card">
+          <h3>Isolation</h3>
+          <p>This article follows CockroachDB's <strong>Serializable</strong> execution. Conflicting operations wait, push timestamps, refresh earlier reads, or retry so the result is equivalent to a serial ordering.</p>
+        </article>
+        <article class="card">
+          <h3>Durability</h3>
+          <p>Every intent and transaction-record update is proposed by a range leaseholder and replicated to that range's Raft quorum before it is considered durable.</p>
+        </article>
+        <article class="card">
+          <h3>Time</h3>
+          <p>An HLC timestamp combines physical time with a logical counter. It preserves causality and remains close to wall time, while configured clock-offset bounds detect unhealthy clocks.</p>
+        </article>
+        <article class="card">
+          <h3>Atomicity</h3>
+          <p>Readers treat intents according to the referenced transaction's status. This indirection makes all writes commit or abort together even though they live on different ranges.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="example">
+      <h2>2. Example: Transfer $100 Across Two Ranges</h2>
+      <p>Assume Alice's row maps to <strong>Range 1</strong>, Bob's row maps to <strong>Range 2</strong>, and both ranges have separate leaseholders and Raft groups.</p>
+
+      <pre><code class="language-sql">BEGIN;
+
+UPDATE accounts
+SET balance = balance - 100
+WHERE id = 1;  -- Alice: key K1 on Range 1
+
+UPDATE accounts
+SET balance = balance + 100
+WHERE id = 2;  -- Bob: key K2 on Range 2
+
+COMMIT;</code></pre>
+
+      <p>The safety invariant is that Alice's debit and Bob's credit become visible together. A crash must never leave only one side committed. The examples below use a transaction record anchored on Range 1, near the first write.</p>
+
+      <blockquote>
+        The record is <strong>not necessarily written when <code>BEGIN</code> runs</strong>. CockroachDB normally creates transaction records lazily. An intent can contain enough transaction metadata to point to an anchor key even while no record exists there yet.
+      </blockquote>
+    </section>
+
+    <section id="actors">
+      <h2>3. Components on the Write Path</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Responsibility in this transfer</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>SQL gateway / transaction coordinator</strong></td>
+              <td>The gateway receiving the session runs the KV transaction through <code>TxnCoordSender</code>. It tracks timestamps, read/write spans, outstanding writes, retries, heartbeats when needed, and finalization.</td>
+            </tr>
+            <tr>
+              <td><strong>DistSender</strong></td>
+              <td>Looks up range descriptors, splits KV batches at range boundaries, and routes each sub-batch to the proper leaseholder.</td>
+            </tr>
+            <tr>
+              <td><strong>Range leaseholder</strong></td>
+              <td>Sequences requests for one range, applies concurrency control, and proposes mutations to that range's Raft group.</td>
+            </tr>
+            <tr>
+              <td><strong>Raft replicas</strong></td>
+              <td>Replicate each range-local intent or transaction-record update to a quorum for durability and availability.</td>
+            </tr>
+            <tr>
+              <td><strong>MVCC intent + lock table</strong></td>
+              <td>The durable intent stores the provisional value and transaction metadata. The in-memory lock table queues conflicting requests; it is not a global lock manager.</td>
+            </tr>
+            <tr>
+              <td><strong>Transaction record</strong></td>
+              <td>A single, replicated record at the transaction's anchor tracks <code>PENDING</code>, <code>STAGING</code>, <code>COMMITTED</code>, or <code>ABORTED</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="architecture">Architecture Graph</h3>
+      <p>The request path is a graph: one coordinator fans writes out to independent ranges, and each range fans replication out to its own Raft quorum.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 900 650" role="img" aria-labelledby="diagram-title diagram-desc">
+          <title id="diagram-title">CockroachDB cross-range transaction architecture</title>
+          <desc id="diagram-desc">A client sends a transfer to a gateway transaction coordinator. DistSender routes writes to Range 1 and Range 2 leaseholders. Each leaseholder replicates to Raft followers. The transaction record is anchored on Range 1, and committed intents are resolved asynchronously.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"></path>
+            </marker>
+            <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"></path>
+            </marker>
+          </defs>
+
+          <rect class="box" x="350" y="20" rx="8" width="200" height="55"></rect>
+          <text class="label" x="450" y="44">SQL client</text>
+          <text class="small" x="450" y="62">TRANSFER $100</text>
+
+          <rect class="box-accent" x="300" y="115" rx="8" width="300" height="70"></rect>
+          <text class="label" x="450" y="141">Gateway / TxnCoordSender</text>
+          <text class="small" x="450" y="160">timestamps · spans · retries · commit</text>
+
+          <rect class="box" x="350" y="225" rx="8" width="200" height="60"></rect>
+          <text class="label" x="450" y="250">DistSender</text>
+          <text class="small" x="450" y="269">split and route KV batch</text>
+
+          <rect class="box-accent" x="65" y="345" rx="8" width="270" height="75"></rect>
+          <text class="label" x="200" y="371">Range 1 leaseholder</text>
+          <text class="small" x="200" y="390">K1: Alice = 900 (intent)</text>
+          <text class="small" x="200" y="406">transaction anchor</text>
+
+          <rect class="box-accent" x="565" y="345" rx="8" width="270" height="75"></rect>
+          <text class="label" x="700" y="371">Range 2 leaseholder</text>
+          <text class="small" x="700" y="390">K2: Bob = 600 (intent)</text>
+          <text class="small" x="700" y="406">independent Raft group</text>
+
+          <rect class="box" x="65" y="485" rx="8" width="120" height="58"></rect>
+          <text class="label" x="125" y="509">R1 replica</text>
+          <text class="small" x="125" y="528">follower</text>
+          <rect class="box" x="215" y="485" rx="8" width="120" height="58"></rect>
+          <text class="label" x="275" y="509">R1 replica</text>
+          <text class="small" x="275" y="528">follower</text>
+
+          <rect class="box" x="565" y="485" rx="8" width="120" height="58"></rect>
+          <text class="label" x="625" y="509">R2 replica</text>
+          <text class="small" x="625" y="528">follower</text>
+          <rect class="box" x="715" y="485" rx="8" width="120" height="58"></rect>
+          <text class="label" x="775" y="509">R2 replica</text>
+          <text class="small" x="775" y="528">follower</text>
+
+          <rect class="box" x="335" y="565" rx="8" width="230" height="60"></rect>
+          <text class="label" x="450" y="590">Transaction record</text>
+          <text class="small" x="450" y="609">STAGING → COMMITTED</text>
+
+          <path class="edge" d="M450 75 L450 115"></path>
+          <path class="edge" d="M450 185 L450 225"></path>
+          <path class="edge" d="M410 285 C350 310 275 315 200 345"></path>
+          <path class="edge" d="M490 285 C550 310 625 315 700 345"></path>
+          <path class="edge" d="M170 420 L125 485"></path>
+          <path class="edge" d="M230 420 L275 485"></path>
+          <path class="edge" d="M670 420 L625 485"></path>
+          <path class="edge" d="M730 420 L775 485"></path>
+          <path class="edge" d="M250 420 C300 485 355 525 400 565"></path>
+          <path class="edge-muted" d="M520 565 C600 535 675 490 700 420"></path>
+
+          <text class="small" x="298" y="316">debit</text>
+          <text class="small" x="602" y="316">credit</text>
+          <text class="small" x="587" y="531">async intent resolution</text>
+        </svg>
+      </figure>
+    </section>
+
+    <section id="lifecycle">
+      <h2>4. Step-by-Step Transaction Lifecycle</h2>
+      <ol class="timeline">
+        <li>
+          <h3>Start and assign an HLC timestamp</h3>
+          <p>The gateway creates in-memory transaction state with a unique transaction ID, an anchor key, an epoch, priority, and read/write timestamps. Reads use MVCC versions at the transaction's read timestamp. A durable transaction record is usually <strong>not</strong> created yet.</p>
+        </li>
+        <li>
+          <h3>Read both balances</h3>
+          <p>The coordinator routes reads to the leaseholders for Range 1 and Range 2. It remembers the read spans so those reads can later be refreshed if a conflict pushes the commit timestamp forward.</p>
+        </li>
+        <li>
+          <h3>Write provisional values</h3>
+          <p>Each update becomes a replicated MVCC intent rather than a committed value. Conceptually:</p>
+          <pre><code>K1 @ T → { value: 900, txn: [id, anchor=K1, epoch, sequence, T] }
+K2 @ T → { value: 600, txn: [id, anchor=K1, epoch, sequence, T] }</code></pre>
+          <p>Each leaseholder checks conflicts and proposes its intent through its own Raft group. The intents carry sequence numbers so retries are idempotent and recovery can verify exactly which writes exist.</p>
+        </li>
+        <li>
+          <h3>Pipeline independent writes</h3>
+          <p>The <code>txnPipeliner</code> may return from a transactional write before its Raft proposal has finished, marking it as an <em>in-flight write</em>. A later dependent operation first issues a <code>QueryIntent</code> proof. This overlaps replication with useful work but does not weaken durability: commit still needs proof for every outstanding write.</p>
+        </li>
+        <li id="parallel-commit">
+          <h3>Commit with a conditional <span class="status">STAGING</span> record</h3>
+          <p>When eligible for Parallel Commits, the final batch sends remaining writes to their ranges while sending <code>EndTxn</code> to the transaction-record range. <code>EndTxn</code> writes a <code>STAGING</code> record containing the unresolved in-flight writes and their expected sequence numbers.</p>
+          <p>Writes already proven are represented as lock spans for later cleanup; the in-flight list is <strong>not necessarily a list of every key the transaction touched</strong>.</p>
+        </li>
+        <li>
+          <h3>Acknowledge the implicit commit</h3>
+          <p>The coordinator returns success only after both conditions hold:</p>
+          <ol>
+            <li>The <code>STAGING</code> transaction record is durably replicated.</li>
+            <li>Every in-flight write named by that record is acknowledged at the expected timestamp and sequence.</li>
+          </ol>
+          <div class="callout">
+            <strong>Commit rule:</strong> <code>STAGING + all promised writes exist ⇒ implicitly COMMITTED</code>. A <code>STAGING</code> record by itself is not sufficient.
+          </div>
+        </li>
+        <li>
+          <h3>Finalize and resolve intents asynchronously</h3>
+          <p>After success can be returned, CockroachDB changes the transaction record to explicit <code>COMMITTED</code> and resolves intents into ordinary committed MVCC values. This cleanup is asynchronous. A request that encounters an unresolved intent can inspect or recover the transaction and help resolve the intent.</p>
+        </li>
+      </ol>
+
+      <h3>Why Parallel Commits Saves Latency</h3>
+      <pre><code>Classic sequential commit:
+  finish every intent write ──Raft──▶ write COMMITTED record ──Raft──▶ reply
+
+Parallel Commit:
+  remaining intent writes ──Raft──┐
+                                   ├── all succeeded ──▶ reply
+  write STAGING record ─────Raft──┘
+                                      └─ async: COMMITTED + resolve intents</code></pre>
+      <p>This optimization removes an <em>extra sequential consensus round from the commit path</em>. It does not make every transaction a single-round operation: earlier SQL statements, reads, conflicts, and non-pipelined writes may already have incurred RPC and Raft rounds.</p>
+    </section>
+
+    <section id="recovery">
+      <h2>5. Crashes and Transaction Recovery</h2>
+      <p>Because a coordinator can disappear at any point, another node must be able to determine the outcome from replicated state alone. A recovery request checks the transaction record and, when necessary, the in-flight write proofs.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Observed state</th>
+              <th>Recovery decision</th>
+              <th>Visible result</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>No record, or abandoned <code>PENDING</code></td>
+              <td>A competing request may push/abort the transaction after liveness and priority checks.</td>
+              <td>Any intents are removed; neither transfer update commits.</td>
+            </tr>
+            <tr>
+              <td><code>STAGING</code> and every listed in-flight write exists</td>
+              <td>Recover as <code>COMMITTED</code>.</td>
+              <td>Both debit and credit become visible.</td>
+            </tr>
+            <tr>
+              <td><code>STAGING</code> but any listed write is missing or mismatched</td>
+              <td>Recover as <code>ABORTED</code>.</td>
+              <td>Neither provisional value becomes visible.</td>
+            </tr>
+            <tr>
+              <td>Explicit <code>COMMITTED</code> or <code>ABORTED</code></td>
+              <td>Resolve leftover intents according to that final state.</td>
+              <td>Committed intents become values; aborted intents are removed.</td>
+            </tr>
+            <tr>
+              <td>Client timed out after sending <code>COMMIT</code></td>
+              <td>Outcome may be ambiguous to the client even though the cluster can recover it.</td>
+              <td>Use an idempotency key or query application state before retrying an external action.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="concurrency">
+      <h2>6. Concurrency Control and Conflicts</h2>
+      <p>CockroachDB is not accurately described as a purely optimistic system. It combines MVCC with durable intents, in-memory lock-table queues, timestamp pushes, deadlock detection, read refreshes, and transaction retries.</p>
+
+      <div class="card-grid">
+        <article class="card">
+          <h3>Reader meets an intent</h3>
+          <p>A reader can ignore a future intent when reading an older MVCC snapshot. If an unresolved intent conflicts with the read, the request enters the lock wait queue and may push the intent's transaction to learn whether it should wait, abort it, or resolve a finished intent.</p>
+        </article>
+        <article class="card">
+          <h3>Writer meets an intent</h3>
+          <p>A conflicting writer normally waits. Push logic considers liveness, priorities, and transaction state; one transaction can be aborted to break a conflict, and distributed deadlock detection handles cycles of waiters.</p>
+        </article>
+        <article class="card">
+          <h3>Write meets a later read</h3>
+          <p>The timestamp cache records recent reads. A writer arriving at an older timestamp must move its write timestamp above a conflicting read, then prove that its own earlier reads remain valid.</p>
+        </article>
+        <article class="card">
+          <h3>Write meets a newer value</h3>
+          <p>A write-too-old conflict pushes the transaction timestamp forward. The transaction can continue only if read refresh succeeds; otherwise CockroachDB retries it at a newer timestamp.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="time">
+      <h2>7. HLC, Uncertainty, and Read Refresh</h2>
+      <p>These mechanisms are related, but they solve different problems:</p>
       <ul>
-        <li><strong>Physical Clocks (NTP):</strong> Physical clocks inevitably drift. Node $A$ and Node $B$ can diverge by tens or hundreds of milliseconds. If Node $A$ executes a write at physical time $t=100$ and Node $B$ reads it immediately after, Node $B$'s physical clock might read $t=95$, triggering stale reads and causality violations.</li>
-        <li><strong>Lamport / Vector Clocks:</strong> Logical clocks preserve causality ($A \rightarrow B \implies L(A) < L(B)$) but bear <strong>no correlation to wall-clock time</strong>. They cannot be queried for temporal ranges like "retrieve data written in the last 5 minutes."</li>
+        <li><strong>Hybrid Logical Clock:</strong> an ordered pair of wall time and a logical counter. Nodes update their HLCs when sending and receiving messages, preserving causality while retaining a useful relationship to physical time.</li>
+        <li><strong>Clock uncertainty:</strong> because clocks are synchronized rather than atomic, a node may encounter a version whose timestamp is slightly in its apparent future. Observed timestamps narrow what is uncertain on nodes already contacted; otherwise the transaction may need a higher timestamp or retry. The bound is a cluster setting, not a universal fixed 250 ms.</li>
+        <li><strong>Read refresh:</strong> after a conflict pushes the transaction's write/commit timestamp from <code>T1</code> to <code>T2</code>, CockroachDB checks whether any previously read span changed in <code>(T1, T2]</code>. If not, it can commit at <code>T2</code>; if data changed, it retries.</li>
       </ul>
-      <p><strong>HLC bridges both paradigms:</strong> It enforces causality like a Lamport clock while remaining tightly bounded to physical wall-clock time.</p>
 
-      <h3 id="hlc-anatomy">Anatomy of an HLC Timestamp</h3>
-      <p>An HLC timestamp is structured as a two-part tuple: <strong>$(l, c)$</strong>:</p>
+      <pre><code>read at T1 ──▶ conflict pushes commit timestamp to T2
+                    │
+                    ▼
+        scan prior read spans for changes in (T1, T2]
+                    │
+             ┌──────┴──────┐
+         unchanged       changed
+             │              │
+       commit at T2     retry transaction</code></pre>
+    </section>
+
+    <section id="latency">
+      <h2>8. Fast Paths and Latency Boundaries</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>When it applies</th>
+              <th>What it saves</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>One-phase commit (1PC)</strong></td>
+              <td>The complete transaction, including commit, fits in one eligible batch on one range.</td>
+              <td>The range can apply the writes as committed in one consensus operation without a distributed transaction record and unresolved intents.</td>
+            </tr>
+            <tr>
+              <td><strong>Same-range STAGING bypass</strong></td>
+              <td>The record and all in-flight writes are evaluated on the same range, so their success is known atomically.</td>
+              <td>The range can avoid leaving a conditional <code>STAGING</code> state.</td>
+            </tr>
+            <tr>
+              <td><strong>Cross-range Parallel Commit</strong></td>
+              <td>The transaction meets protocol eligibility requirements and writes several ranges, as in this transfer.</td>
+              <td>Overlaps outstanding writes with the staging-record proposal, removing a sequential consensus round from commit.</td>
+            </tr>
+            <tr>
+              <td><strong>Non-parallel commit</strong></td>
+              <td>The transaction uses features or request shapes that are not eligible for Parallel Commits.</td>
+              <td>No special saving: CockroachDB first proves writes, then finalizes the transaction record.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="code-map">
+      <h2>9. Where This Lives in CockroachDB's Code</h2>
+      <p>The links below point to one CockroachDB source revision so the files can be read together consistently.</p>
+      <ul class="source-list">
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvclient/kvcoord/txn_coord_sender.go"><code>txn_coord_sender.go</code></a>
+          <div class="muted"><code>TxnCoordSender</code>: client-side transaction state, interceptor stack, retry handling, and finalization.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvclient/kvcoord/dist_sender.go"><code>dist_sender.go</code></a>
+          <div class="muted"><code>DistSender</code>: divides batches by range and sends range-local requests, including parallel-commit batches.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvclient/kvcoord/txn_interceptor_pipeliner.go"><code>txn_interceptor_pipeliner.go</code></a>
+          <div class="muted"><code>txnPipeliner</code>: tracks in-flight writes and inserts <code>QueryIntent</code> proofs before dependent operations.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvclient/kvcoord/txn_interceptor_committer.go"><code>txn_interceptor_committer.go</code></a>
+          <div class="muted"><code>txnCommitter</code> and <code>canCommitInParallel</code>: construct and validate parallel-commit requests.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvserver/batcheval/cmd_end_transaction.go"><code>cmd_end_transaction.go</code></a>
+          <div class="muted"><code>EndTxn</code> evaluation: validates lock spans and writes final or staging transaction state.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvserver/batcheval/cmd_recover_txn_test.go"><code>cmd_recover_txn_test.go</code></a>
+          <div class="muted">Executable recovery examples: a staged transaction commits only when all in-flight writes exist; otherwise it aborts.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/blob/46175303/pkg/kv/kvserver/replica_batch_updates.go"><code>replica_batch_updates.go</code></a>
+          <div class="muted"><code>maybeStripInFlightWrites</code>: same-range optimization that can remove unnecessary staged in-flight writes.</div>
+        </li>
+        <li>
+          <a href="https://github.com/cockroachdb/cockroach/tree/master/pkg/kv/kvserver/concurrency"><code>pkg/kv/kvserver/concurrency</code></a>
+          <div class="muted">Concurrency manager, lock table, wait queues, intent discovery, and request sequencing.</div>
+        </li>
+      </ul>
+    </section>
+
+    <section id="corrections">
+      <h2>10. Corrections to Common Simplifications</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Simplified claim</th>
+              <th>More accurate model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>“A <code>PENDING</code> record is created at transaction start.”</td>
+              <td>Records are normally lazy. Intents can refer to an anchor before a record exists; commit, heartbeat, or a push can create it when needed.</td>
+            </tr>
+            <tr>
+              <td>“<code>STAGING</code> means committed.”</td>
+              <td>It means <em>conditionally committed</em>. Every promised in-flight write must exist at the expected sequence and timestamp; a missing write causes recovery to abort.</td>
+            </tr>
+            <tr>
+              <td>“The staged record lists every written key.”</td>
+              <td>Its in-flight list contains writes still requiring proof. Already proven writes are tracked as lock spans for cleanup.</td>
+            </tr>
+            <tr>
+              <td>“Parallel Commits makes the whole transaction one round.”</td>
+              <td>It removes an additional sequential consensus round from the commit path. Earlier statements and conflicts can still require more rounds.</td>
+            </tr>
+            <tr>
+              <td>“Reader cleanup is intent pipelining.”</td>
+              <td>Write pipelining overlaps replication. Cleanup is <em>intent resolution</em>; coordinators and later requests can perform it.</td>
+            </tr>
+            <tr>
+              <td>“CockroachDB concurrency control is purely optimistic.”</td>
+              <td>It combines MVCC and retries with intents, lock-table waiting, transaction pushes, and deadlock handling.</td>
+            </tr>
+            <tr>
+              <td>“Clock uncertainty and read refresh are the same.”</td>
+              <td>Uncertainty handles possible future versions caused by clock skew. Refresh proves old reads are still valid after a timestamp push.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="references">
+      <h2>References</h2>
       <ul>
-        <li><strong>$l$ (Physical Component):</strong> The highest physical timestamp observed by the node so far (expressed in milliseconds or nanoseconds).</li>
-        <li><strong>$c$ (Logical Component):</strong> A logical counter used to order events that occur within the same physical tick.</li>
+        <li><a href="https://dl.acm.org/doi/10.1145/3318464.3386134">CockroachDB: The Resilient Geo-Distributed SQL Database</a>, SIGMOD 2020—especially Sections 3.1–3.4.</li>
+        <li><a href="https://github.com/cockroachdb/cockroach/blob/master/docs/RFCS/20180324_parallel_commit.md">Parallel Commits RFC</a>—protocol motivation, staging semantics, recovery, and correctness.</li>
+        <li><a href="https://www.cockroachlabs.com/docs/stable/architecture/transaction-layer">CockroachDB transaction-layer documentation</a>.</li>
+        <li><a href="https://www.cockroachlabs.com/docs/stable/architecture/life-of-a-distributed-transaction">Life of a distributed transaction</a>.</li>
+        <li><a href="https://github.com/cockroachdb/cockroach/tree/master/docs/tla-plus/ParallelCommits">Parallel Commits TLA+ specification</a> used to model and verify protocol behavior.</li>
       </ul>
-      <p>Comparing two HLC timestamps $T_1 = (l_1, c_1)$ and $T_2 = (l_2, c_2)$ uses lexicographical evaluation:</p>
-      $$T_1 < T_2 \iff (l_1 < l_2) \quad \text{OR} \quad (l_1 = l_2 \text{ AND } c_1 < c_2)$$
+    </section>
 
-      <pre><code>                        HLC TIMESTAMP STRUCTURE
-┌───────────────────────────────────────┬───────────────────────────────┐
-│        Physical Component (l)         │     Logical Component (c)     │
-│   Highest Physical Time Seen So Far   │ Tie-breaker for Same Physical │
-└───────────────────────────────────────┴───────────────────────────────┘</code></pre>
+    <hr />
+    <p class="muted">Created October 5, 2026 · Based on the CockroachDB paper, design RFC, documentation, and source code linked above.</p>
+  </main>
 
-      <h3 id="hlc-state-machine">How HLC Updates: The State Machine</h3>
-      <p>Every node $i$ maintains its local HLC state $(l_i, c_i)$ alongside access to its local OS physical clock $pt_i$. Clocks update during <strong>Local Events</strong> and <strong>Message Receives</strong>.</p>
-
-      <h4>Case 1: Local Event or Send (e.g., Local Write)</h4>
-      <pre><code class="language-python">pt_i = current_physical_time()
-
-if pt_i > l_i:
-    l_i =
+  <script>
+    if (window.hljs) {
+      window.hljs.highlightAll();
+    }
+  </script>
+</body>
+</html>
