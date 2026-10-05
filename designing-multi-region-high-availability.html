@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical system design for a highly available service across multiple regions.">
+  <title>Designing Multi-Region High Availability</title>
+  <style>
+    :root{
+      --bg:#f5f2ea;--surface:#fffdf8;--surface-2:#eee9dd;--ink:#17211d;
+      --muted:#65716a;--line:#d9d4c8;--accent:#236f8d;--accent-dark:#174b61;
+      --green:#176b55;--purple:#74519b;--orange:#b45d18;--red:#a9321d;
+      --shadow:0 18px 50px rgba(28,36,31,.09);
+      --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+      --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --serif:Iowan Old Style,Charter,"Bitstream Charter",Georgia,serif
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);
+      background:radial-gradient(circle at 90% 2%,rgba(35,111,141,.15),transparent 25rem),var(--bg);
+      font:16px/1.7 var(--sans)
+    }
+    a{color:var(--accent-dark)}
+    code{
+      padding:.14rem .35rem;border-radius:5px;background:var(--surface-2);
+      font-family:var(--mono);font-size:.9em
+    }
+    pre{
+      overflow-x:auto;margin:1rem 0 0;padding:1.2rem;border:1px solid #263931;
+      border-radius:12px;color:#e8f1ed;background:#13231d;font:.86rem/1.65 var(--mono)
+    }
+    .page{width:min(1160px,calc(100% - 32px));margin:0 auto}
+    .topbar{
+      display:flex;justify-content:space-between;align-items:center;padding:22px 0;
+      font-size:.86rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .topbar a{color:var(--ink);font-weight:750;text-decoration:none}
+    .status{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .status::before{
+      width:8px;height:8px;border-radius:50%;background:var(--green);
+      content:"";box-shadow:0 0 0 4px rgba(23,107,85,.12)
+    }
+    .hero{
+      display:grid;grid-template-columns:1fr;gap:28px;align-items:end;
+      padding:70px 0 78px;border-top:1px solid var(--line)
+    }
+    .eyebrow{
+      margin:0 0 16px;color:var(--accent-dark);font-size:.82rem;font-weight:800;
+      letter-spacing:.16em;text-transform:uppercase
+    }
+    h1,h2,h3{text-wrap:balance}
+    h1{
+      max-width:none;margin:0;font:700 clamp(2.25rem,4.4vw,3.15rem)/.93 var(--serif);
+      letter-spacing:-.055em;white-space:nowrap
+    }
+    .lede{max-width:760px;margin:0;color:var(--muted);font:1.13rem/1.75 var(--serif)}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+    .pill{
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+      color:var(--muted);background:rgba(255,253,248,.55);font-size:.78rem;font-weight:700
+    }
+    .layout{
+      display:grid;grid-template-columns:210px minmax(0,760px);gap:70px;
+      justify-content:center;padding-bottom:110px
+    }
+    aside{position:relative}
+    nav{
+      position:sticky;top:24px;padding:18px 0;border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    nav strong{
+      display:block;margin-bottom:10px;font-size:.72rem;letter-spacing:.14em;
+      text-transform:uppercase
+    }
+    nav a{
+      display:block;padding:4px 0;color:var(--muted);font-size:.82rem;text-decoration:none
+    }
+    nav a:hover{color:var(--accent-dark)}
+    article>section{margin:0 0 76px;scroll-margin-top:28px}
+    h2{
+      margin:0 0 22px;font:700 clamp(2rem,4vw,3.1rem)/1.05 var(--serif);
+      letter-spacing:-.035em
+    }
+    h3{margin:30px 0 8px;font-size:1.04rem;letter-spacing:-.01em}
+    p{margin:0 0 18px}ul,ol{padding-left:1.25rem}li{margin:.42rem 0}
+    .section-number{
+      display:block;margin-bottom:8px;color:var(--accent);
+      font:700 .75rem/1 var(--mono);letter-spacing:.12em
+    }
+    .callout{
+      margin:26px 0;padding:20px 22px;border-left:4px solid var(--accent);
+      border-radius:0 12px 12px 0;background:var(--surface);box-shadow:var(--shadow)
+    }
+    .callout strong{color:var(--accent-dark)}
+    .grid-2,.grid-3{display:grid;gap:14px;margin:22px 0}
+    .grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}
+    .card{
+      padding:20px;border:1px solid var(--line);border-radius:14px;
+      background:rgba(255,253,248,.7)
+    }
+    .card h3{margin-top:0}.card p,.card li{color:var(--muted);font-size:.9rem}
+    .card p:last-child{margin-bottom:0}
+    .metric{color:var(--accent-dark);font:700 1.85rem/1 var(--serif)}
+    .diagram{
+      overflow-x:auto;margin:28px 0;padding:28px 24px;border:1px solid var(--line);
+      border-radius:18px;background:
+        linear-gradient(rgba(217,212,200,.25) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(217,212,200,.25) 1px,transparent 1px),var(--surface);
+      background-size:24px 24px;box-shadow:var(--shadow)
+    }
+    .diagram-caption{
+      margin:14px 0 0;color:var(--muted);font-size:.78rem;text-align:center
+    }
+    .decision{width:100%;margin:18px 0;border-collapse:collapse;font-size:.86rem}
+    .decision th,.decision td{
+      padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top
+    }
+    .decision th{
+      color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase
+    }
+    .steps{margin:24px 0;padding:0;list-style:none;counter-reset:step}
+    .steps li{
+      position:relative;min-height:52px;margin:0;padding:0 0 24px 52px;counter-increment:step
+    }
+    .steps li::before{
+      position:absolute;top:0;left:0;display:grid;width:32px;height:32px;
+      place-items:center;border-radius:50%;color:white;background:var(--accent);
+      content:counter(step);font:700 .78rem/1 var(--mono)
+    }
+    .steps li:not(:last-child)::after{
+      position:absolute;top:34px;bottom:2px;left:15px;width:1px;
+      background:var(--line);content:""
+    }
+    .good{color:var(--green);font-weight:700}.warn{color:var(--red);font-weight:700}
+    .footer{
+      display:flex;justify-content:space-between;gap:20px;padding:35px 0 55px;
+      border-top:1px solid var(--line);color:var(--muted);font-size:.8rem
+    }
+    @media(max-width:820px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 60px}
+      .layout{display:block}aside{display:none}.grid-3{grid-template-columns:1fr}
+    }
+    @media(max-width:560px){
+      .page{width:min(100% - 24px,1160px)}
+      h1{font-size:3.05rem;white-space:normal}.grid-2{grid-template-columns:1fr}
+      .footer{display:block}
+    }
+    @media print{
+      body{background:white}.topbar,aside{display:none}.hero,.layout{display:block}
+      article>section{break-inside:avoid}.card,.diagram,.callout{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a href="./">Engineering Notes</a>
+      <span class="status">System design study</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distributed systems · Case study</p>
+          <h1>Designing Multi-Region High Availability</h1>
+          <div class="meta">
+            <span class="pill">Regional cells</span>
+            <span class="pill">Traffic steering</span>
+            <span class="pill">Fencing</span>
+            <span class="pill">16 min read</span>
+          </div>
+        </div>
+        <p class="lede">
+          How do we keep serving through a complete regional outage without
+          creating split brain or corrupting state? The design uses independent
+          regional cells, global traffic steering, explicit data ownership, and
+          rehearsed failover—not merely duplicate infrastructure.
+        </p>
+      </section>
+
+      <div class="layout">
+        <aside>
+          <nav aria-label="Table of contents">
+            <strong>On this page</strong>
+            <a href="#scope">Requirements</a>
+            <a href="#objectives">RTO and RPO</a>
+            <a href="#models">Deployment models</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#traffic">Traffic steering</a>
+            <a href="#data">Data architecture</a>
+            <a href="#capacity">Capacity</a>
+            <a href="#failover">Failover sequence</a>
+            <a href="#dependencies">Dependency isolation</a>
+            <a href="#operations">Testing and operations</a>
+            <a href="#tools">Technology stack</a>
+          </nav>
+        </aside>
+
+        <article>
+          <section id="scope">
+            <span class="section-number">01 / SCOPE</span>
+            <h2>Design for failures larger than a server</h2>
+            <p>
+              The service exposes stateless HTTP and gRPC APIs backed by durable
+              transactional state, caches, queues, object storage, and background
+              jobs. It must tolerate a complete region becoming unreachable while
+              preserving authentication, core reads, and carefully defined writes.
+            </p>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Functional</h3>
+                <ul>
+                  <li>Route users to healthy nearby regions</li>
+                  <li>Preserve sessions and idempotent writes through failover</li>
+                  <li>Recover background work without double effects</li>
+                  <li>Support planned evacuation and regional maintenance</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Non-functional</h3>
+                <ul>
+                  <li>99.99% API availability</li>
+                  <li>Regional failover within five minutes</li>
+                  <li>Documented data-loss bound per data class</li>
+                  <li>No shared runtime dependency that defeats isolation</li>
+                </ul>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>Multi-region is not automatically highly available.</strong>
+              A global database, identity provider, deployment pipeline, secret
+              store, or bad configuration can fail every region together. The
+              design must reduce correlated failure, not only add copies.
+            </div>
+          </section>
+
+          <section id="objectives">
+            <span class="section-number">02 / RECOVERY CONTRACT</span>
+            <h2>Define RTO and RPO before architecture</h2>
+            <p>
+              Recovery Time Objective (RTO) is how long the service may be
+              unavailable. Recovery Point Objective (RPO) is how much recently
+              committed data may be lost. Different data classes deserve different
+              cost and latency trade-offs.
+            </p>
+            <table class="decision">
+              <thead>
+                <tr><th>Data class</th><th>Target RTO</th><th>Target RPO</th><th>Strategy</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Account and payment state</td><td>&lt; 5 minutes</td><td>0</td><td>Strong quorum spanning at least three failure domains</td></tr>
+                <tr><td>Core product records</td><td>&lt; 5 minutes</td><td>&lt; 30 seconds</td><td>Home-region write, async replica, fenced promotion</td></tr>
+                <tr><td>Search and cache</td><td>&lt; 1 minute</td><td>Rebuildable</td><td>Independent regional copies</td></tr>
+                <tr><td>Analytics events</td><td>&lt; 1 hour</td><td>&lt; 5 minutes</td><td>Buffered streams and object-storage archive</td></tr>
+              </tbody>
+            </table>
+            <p>
+              RPO zero across distant regions requires synchronous agreement and
+              therefore adds wide-area latency to every write. Do not promise it
+              for every table when only a small financial subset needs it.
+            </p>
+          </section>
+
+          <section id="models">
+            <span class="section-number">03 / TOPOLOGY</span>
+            <h2>Choose active-active only where state allows it</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Model</th><th>Benefit</th><th>Cost</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Active-passive</strong></td>
+                  <td>Simple ownership and conflict-free writes</td>
+                  <td>Idle capacity and slower, riskier promotion</td>
+                </tr>
+                <tr>
+                  <td><strong>Active-active stateless</strong></td>
+                  <td>Low-latency reads and immediate traffic capacity</td>
+                  <td>Still needs an explicit state-write strategy</td>
+                </tr>
+                <tr>
+                  <td><strong>Multi-writer data</strong></td>
+                  <td>Local writes in every region</td>
+                  <td>Conflicts, global quorum latency, or restricted data model</td>
+                </tr>
+                <tr>
+                  <td><strong>Home-region entities</strong></td>
+                  <td>One writer per tenant or entity; reads active everywhere</td>
+                  <td>Some writes take a cross-region hop</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Use active-active regional application cells, but assign each tenant
+              or entity a home region for ordinary writes. Reads and conflict-safe
+              operations run locally. This avoids pretending that arbitrary
+              relational updates can merge safely after a partition.
+            </p>
+          </section>
+
+          <section id="architecture">
+            <span class="section-number">04 / HIGH LEVEL</span>
+            <h2>Build independent regional cells</h2>
+            <div class="diagram" role="img" aria-label="Multi-region highly available architecture">
+              <svg viewBox="0 0 1000 540" style="display:block;width:100%;min-width:700px;height:auto" aria-hidden="true">
+                <defs>
+                  <marker id="ha-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0L10 5L0 10z" fill="#65716a"/>
+                  </marker>
+                </defs>
+                <g fill="none" stroke="#65716a" stroke-width="2" marker-end="url(#ha-arrow)">
+                  <path d="M145 75H210"/>
+                  <path d="M270 110V165H190"/>
+                  <path d="M270 110V165H460"/>
+                  <path d="M270 110V165H730"/>
+                  <path d="M190 235V290"/>
+                  <path d="M460 235V290"/>
+                  <path d="M730 235V290"/>
+                  <path d="M190 360V415"/>
+                  <path d="M460 360V415"/>
+                  <path d="M730 360V415"/>
+                </g>
+                <g fill="none" stroke="#65716a" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#ha-arrow)">
+                  <path d="M250 325H400"/>
+                  <path d="M520 325H670"/>
+                  <path d="M790 325H900V390H190V360"/>
+                  <path d="M260 455H390"/>
+                  <path d="M530 455H660"/>
+                </g>
+                <g fill="#fffdf8" stroke="#17211d" stroke-width="2">
+                  <rect x="25" y="40" width="120" height="70" rx="11"/>
+                  <rect x="210" y="40" width="120" height="70" rx="11" stroke="#236f8d"/>
+                  <rect x="120" y="165" width="140" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="390" y="165" width="140" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="660" y="165" width="140" height="70" rx="11" stroke="#176b55"/>
+                  <rect x="120" y="290" width="140" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="390" y="290" width="140" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="660" y="290" width="140" height="70" rx="11" stroke="#285f8f"/>
+                  <rect x="120" y="415" width="140" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="390" y="415" width="140" height="70" rx="11" stroke="#74519b"/>
+                  <rect x="660" y="415" width="140" height="70" rx="11" stroke="#74519b"/>
+                </g>
+                <g fill="#17211d" font-family="Inter,sans-serif" font-size="14" font-weight="700" text-anchor="middle">
+                  <text x="85" y="81">Clients</text>
+                  <text x="270" y="66" fill="#174b61">Global edge +</text>
+                  <text x="270" y="84" fill="#174b61">traffic steering</text>
+                  <text x="190" y="191" fill="#176b55">Region A</text>
+                  <text x="190" y="209" fill="#176b55">API cell</text>
+                  <text x="460" y="191" fill="#176b55">Region B</text>
+                  <text x="460" y="209" fill="#176b55">API cell</text>
+                  <text x="730" y="191" fill="#176b55">Region C</text>
+                  <text x="730" y="209" fill="#176b55">API cell</text>
+                  <text x="190" y="316" fill="#285f8f">Regional DB</text>
+                  <text x="190" y="334" fill="#285f8f">+ cache</text>
+                  <text x="460" y="316" fill="#285f8f">Regional DB</text>
+                  <text x="460" y="334" fill="#285f8f">+ cache</text>
+                  <text x="730" y="316" fill="#285f8f">Regional DB</text>
+                  <text x="730" y="334" fill="#285f8f">+ cache</text>
+                  <text x="190" y="441" fill="#74519b">Queue + jobs</text>
+                  <text x="190" y="459" fill="#74519b">cell A</text>
+                  <text x="460" y="441" fill="#74519b">Queue + jobs</text>
+                  <text x="460" y="459" fill="#74519b">cell B</text>
+                  <text x="730" y="441" fill="#74519b">Queue + jobs</text>
+                  <text x="730" y="459" fill="#74519b">cell C</text>
+                </g>
+                <g fill="#65716a" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">
+                  <text x="500" y="275">each cell can serve without synchronous calls to another cell</text>
+                  <text x="500" y="520">versioned replication and event mirroring cross region boundaries</text>
+                </g>
+              </svg>
+              <p class="diagram-caption">
+                Every region contains a complete serving cell. Cross-region links
+                replicate durable state; they are not required for ordinary local reads.
+              </p>
+            </div>
+            <p>
+              A cell includes compute, load balancers, database replicas, cache,
+              queue consumers, object-storage access, secrets, and observability.
+              Regional APIs must not call another region synchronously for health
+              checks, logging, configuration, or cache access.
+            </p>
+          </section>
+
+          <section id="traffic">
+            <span class="section-number">05 / ROUTING</span>
+            <h2>Fail traffic using several health signals</h2>
+            <p>
+              An anycast accelerator or global load balancer sends users to the
+              nearest healthy regional endpoint. DNS remains useful for coarse
+              control, but resolver caching makes low-TTL failover slower and less
+              deterministic than connection-level anycast steering.
+            </p>
+            <ol class="steps">
+              <li>
+                <strong>Edge reachability.</strong> Confirm load balancer and TLS
+                handshakes from several independent networks.
+              </li>
+              <li>
+                <strong>Synthetic transactions.</strong> Exercise authentication,
+                a representative read, and a safe write against the whole cell.
+              </li>
+              <li>
+                <strong>Regional SLOs.</strong> Evaluate error rate, latency,
+                saturation, replication lag, and dependency health.
+              </li>
+              <li>
+                <strong>Quorum decision.</strong> Require sustained multi-signal
+                failure before removing a region; avoid reacting to one noisy probe.
+              </li>
+              <li>
+                <strong>Gradual restoration.</strong> Send 1%, then 10%, then more
+                traffic after recovery instead of instantly returning the full load.
+              </li>
+            </ol>
+            <div class="callout">
+              <strong>Automatic failover needs a circuit breaker.</strong> If
+              destination regions lack headroom or data is too stale, shifting all
+              traffic can turn one outage into three. Automation must check both
+              source failure and target readiness.
+            </div>
+          </section>
+
+          <section id="data">
+            <span class="section-number">06 / STATE</span>
+            <h2>Use one consistency strategy per data class</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>State</th><th>Regional strategy</th><th>Failure behavior</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Financial ledger</td>
+                  <td>Globally consistent database or synchronous quorum</td>
+                  <td>Reject writes when quorum is unavailable</td>
+                </tr>
+                <tr>
+                  <td>Tenant records</td>
+                  <td>Home-region single writer with async read replicas</td>
+                  <td>Promote using a higher fencing epoch</td>
+                </tr>
+                <tr>
+                  <td>Sessions</td>
+                  <td>Signed stateless token plus regional refresh state</td>
+                  <td>Reauthenticate if refresh state is unavailable</td>
+                </tr>
+                <tr>
+                  <td>Cache and search</td>
+                  <td>Independent regional copies rebuilt from truth</td>
+                  <td>Cold cache or degraded search after failover</td>
+                </tr>
+                <tr>
+                  <td>Objects</td>
+                  <td>Versioned cross-region replication</td>
+                  <td>Read last replicated immutable version</td>
+                </tr>
+              </tbody>
+            </table>
+            <h3>Prevent split brain with fencing</h3>
+            <p>
+              Every home-region assignment has a monotonically increasing epoch.
+              Writers include it in database mutations and downstream events.
+              Promoting Region B first obtains epoch 43 from a globally consistent
+              control record; Region A's old epoch 42 writes are then rejected even
+              if it returns with stale routing.
+            </p>
+            <pre>UPDATE tenant_record
+SET value = ?
+WHERE tenant_id = ?
+  AND home_region = "region-b"
+  AND epoch = 43;</pre>
+            <p>
+              Idempotency keys survive retries across regions. Keep them in the
+              same durable scope as the business write; a regional in-memory
+              deduplication cache cannot prevent duplicate payments after failover.
+            </p>
+            <h3>Conflict-safe active-active data</h3>
+            <p>
+              Some values merge safely: grow-only counters, sets with tombstones,
+              and last-seen timestamps with deterministic tie-breakers. Use CRDTs
+              or explicit merge rules only for those fields. Never apply
+              last-write-wins blindly to balances, inventory, or permissions.
+            </p>
+          </section>
+
+          <section id="capacity">
+            <span class="section-number">07 / HEADROOM</span>
+            <h2>Provision for the largest credible loss</h2>
+            <p>
+              If three regions each run at 70% utilization, losing one requires
+              the other two to absorb 50% more traffic, pushing them to 105%.
+              That design is not region-failure tolerant.
+            </p>
+            <div class="grid-3">
+              <div class="card">
+                <div class="metric">N+1</div>
+                <h3>regional capacity</h3>
+                <p>Surviving cells handle peak traffic after one full cell loss.</p>
+              </div>
+              <div class="card">
+                <div class="metric">&lt; 60%</div>
+                <h3>normal utilization</h3>
+                <p>For three balanced regions before one-region failover.</p>
+              </div>
+              <div class="card">
+                <div class="metric">2×</div>
+                <h3>burst protection</h3>
+                <p>Autoscaling is helpful but cannot replace warm baseline capacity.</p>
+              </div>
+            </div>
+            <p>
+              Reserve quota, database connections, NAT capacity, IP addresses,
+              Kafka partitions, and third-party limits—not only compute instances.
+              Autoscaling may take minutes and often depends on the same cloud
+              control plane affected by a regional incident.
+            </p>
+          </section>
+
+          <section id="failover">
+            <span class="section-number">08 / RECOVERY</span>
+            <h2>Fail over state before accepting writes</h2>
+            <ol class="steps">
+              <li>
+                <strong>Declare the incident.</strong> Freeze automated deploys and
+                configuration changes; record the last known replication watermark.
+              </li>
+              <li>
+                <strong>Stop or fence old writers.</strong> Remove credentials,
+                revoke leases, or advance the global epoch before promoting replicas.
+              </li>
+              <li>
+                <strong>Promote durable state.</strong> Choose the recovery point,
+                promote database and queue replicas, and validate invariants.
+              </li>
+              <li>
+                <strong>Start background ownership.</strong> Resume schedulers and
+                consumers with idempotency; expect inflight work to repeat.
+              </li>
+              <li>
+                <strong>Shift traffic gradually.</strong> Begin with reads and
+                canaries, then enable writes after synthetic verification.
+              </li>
+              <li>
+                <strong>Reconcile after recovery.</strong> Compare logs, quarantine
+                divergent writes, rebuild replicas, and only then return traffic.
+              </li>
+            </ol>
+            <p>
+              Failback is a separate migration, not the reverse of a DNS change.
+              Region A must rejoin as a clean replica of the new authority in
+              Region B. Never let its stale database resume writes automatically.
+            </p>
+          </section>
+
+          <section id="dependencies">
+            <span class="section-number">09 / ISOLATION</span>
+            <h2>Remove hidden global single points</h2>
+            <ul>
+              <li><strong>Identity:</strong> cache signing keys and validate access tokens locally; keep emergency login paths.</li>
+              <li><strong>Secrets:</strong> replicate encrypted secrets ahead of time; do not fetch them cross-region at startup.</li>
+              <li><strong>Configuration:</strong> run from a last-known-good signed bundle when the control plane is unavailable.</li>
+              <li><strong>Deployment:</strong> pin artifacts in every region and allow one region to deploy without another.</li>
+              <li><strong>Observability:</strong> buffer telemetry locally; logging failure must not block requests.</li>
+              <li><strong>Third parties:</strong> use regional endpoints, strict timeouts, circuit breakers, and degraded modes.</li>
+              <li><strong>Certificates and DNS:</strong> pre-provision credentials and protect registrar changes with separate controls.</li>
+            </ul>
+            <p>
+              Use cell-local service discovery, cache, queues, and feature flags.
+              A global control plane may distribute desired state, but every cell
+              keeps and can run from a validated local copy.
+            </p>
+          </section>
+
+          <section id="operations">
+            <span class="section-number">10 / VALIDATION</span>
+            <h2>Prove failover before the incident</h2>
+            <div class="grid-2">
+              <div class="card">
+                <h3>Continuous tests</h3>
+                <ul>
+                  <li>Terminate instances and availability zones</li>
+                  <li>Inject dependency latency and packet loss</li>
+                  <li>Verify target-region capacity and quotas</li>
+                  <li>Restore backups into isolated environments</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>Game days</h3>
+                <ul>
+                  <li>Evacuate a production region intentionally</li>
+                  <li>Promote databases and queue ownership</li>
+                  <li>Measure actual RTO, RPO, and duplicate effects</li>
+                  <li>Practice failback and data reconciliation</li>
+                </ul>
+              </div>
+            </div>
+            <p>
+              Run regular “regional evacuation” drills with a controlled fraction
+              of tenants before testing the full cell. A runbook that has never
+              executed its database promotion, fencing, and rollback steps is only
+              documentation—not a recovery capability.
+            </p>
+            <h3>Observe the user journey</h3>
+            <p>
+              Track availability and latency by region, operation, and data owner.
+              Alert on replication lag, fencing epoch divergence, traffic-shift
+              percentage, target saturation, queue age, cache coldness, and
+              cross-region request count. Synthetic clients should continuously
+              test authentication, reads, writes, and background completion.
+            </p>
+            <div class="callout">
+              The theoretical availability of two independent 99.9% regions is
+              99.9999%, but regions are not independent when they share code,
+              operators, cloud control planes, or data systems. Measure observed
+              end-to-end availability instead of multiplying provider SLAs.
+            </div>
+          </section>
+
+          <section id="tools">
+            <span class="section-number">11 / IMPLEMENTATION</span>
+            <h2>Recommended AWS technology stack</h2>
+            <table class="decision">
+              <thead>
+                <tr><th>Responsibility</th><th>Tool</th><th>Why it fits</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Global traffic</td><td><strong>AWS Global Accelerator + Route 53 ARC</strong></td><td>Anycast steering, health control, and guarded regional shifts</td></tr>
+                <tr><td>Regional compute</td><td><strong>EKS across three AZs</strong></td><td>Independent cells with topology-aware scheduling</td></tr>
+                <tr><td>Relational state</td><td><strong>Aurora Global Database</strong></td><td>Home-region writes and managed cross-region read replicas</td></tr>
+                <tr><td>Conflict-safe key values</td><td><strong>DynamoDB Global Tables</strong></td><td>Multi-region writes for data with explicit merge semantics</td></tr>
+                <tr><td>Regional cache</td><td><strong>ElastiCache Redis</strong></td><td>Independent disposable caches inside each cell</td></tr>
+                <tr><td>Event replication</td><td><strong>MSK + MSK Replicator</strong></td><td>Regional streams with controlled cross-region replication</td></tr>
+                <tr><td>Object storage</td><td><strong>S3 versioning + CRR</strong></td><td>Immutable cross-region objects and recovery versions</td></tr>
+                <tr><td>Delivery</td><td><strong>Terraform + Argo CD</strong></td><td>Versioned infrastructure and independently reconciled regions</td></tr>
+                <tr><td>Observability</td><td><strong>Prometheus + Grafana</strong></td><td>Cell-local telemetry with a separate global view</td></tr>
+              </tbody>
+            </table>
+            <p>
+              Aurora Global Database is single-writer by default; promotion is not
+              conflict-free active-active. DynamoDB Global Tables use last-writer-
+              wins replication and are safe only when the application data model
+              tolerates or resolves concurrent updates. Tool names do not remove
+              those consistency constraints.
+            </p>
+            <h3>Final design summary</h3>
+            <p>
+              Run complete, independently operable cells in several regions and
+              steer traffic through a health-aware global edge. Keep reads local,
+              assign ordinary writes a home region, and reserve global quorum for
+              the small set of data requiring RPO zero. Replicate durable state
+              with explicit lag and ownership, fence old writers before promotion,
+              provision N+1 capacity, and make retries idempotent. Most importantly,
+              rehearse evacuation, promotion, reconciliation, and failback until
+              the measured recovery objectives match the promises.
+            </p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>Engineering Notes · System Design</span>
+      <span>Built as a single, dependency-free HTML file.</span>
+    </footer>
+  </div>
+</body>
+</html>

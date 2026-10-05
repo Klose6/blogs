@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CockroachDB Transaction & Clock Internals</title>
+  
+  <!-- Modern System Typography & Styling -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" id="highlight-theme" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+  
+  <!-- MathJax for LaTeX Rendering -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --border-color: #30363d;
+      --text-primary: #c9d1d9;
+      --text-heading: #f0f6fc;
+      --accent: #58a6ff;
+      --accent-muted: rgba(56, 139, 253, 0.15);
+      --code-bg: #161b22;
+      --table-header-bg: #161b22;
+      --sidebar-width: 280px;
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f6f8fa;
+      --bg-tertiary: #eaeef2;
+      --border-color: #d0d7de;
+      --text-primary: #24292f;
+      --text-heading: #1f2328;
+      --accent: #0969da;
+      --accent-muted: rgba(9, 105, 218, 0.15);
+      --code-bg: #f6f8fa;
+      --table-header-bg: #f6f8fa;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: var(--sidebar-width);
+      background-color: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      overflow-y: auto;
+      padding: 1.5rem 1rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-brand {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .nav-list {
+      list-style: none;
+    }
+
+    .nav-item {
+      margin-bottom: 0.25rem;
+    }
+
+    .nav-link {
+      display: block;
+      padding: 0.4rem 0.6rem;
+      color: var(--text-primary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .nav-link:hover {
+      background-color: var(--bg-tertiary);
+      color: var(--accent);
+    }
+
+    .nav-sublink {
+      padding-left: 1.5rem;
+      font-size: 0.85rem;
+    }
+
+    /* Main Content Layout */
+    .content-wrapper {
+      margin-left: var(--sidebar-width);
+      flex: 1;
+      max-width: 960px;
+      padding: 2.5rem 3rem;
+    }
+
+    /* Header Controls */
+    .header-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 1rem;
+    }
+
+    .theme-toggle {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+
+      &:hover {
+        background: var(--bg-tertiary);
+      }
+    }
+
+    /* Typography */
+    h1 {
+      font-size: 2.2rem;
+      color: var(--text-heading);
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.5rem;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+      color: var(--text-heading);
+      margin-top: 2.5rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.4rem;
+    }
+
+    h3 {
+      font-size: 1.15rem;
+      color: var(--text-heading);
+      margin-top: 1.8rem;
+      margin-bottom: 0.75rem;
+    }
+
+    p {
+      margin-bottom: 1rem;
+    }
+
+    ul, ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    li {
+      margin-bottom: 0.3rem;
+    }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--border-color);
+      margin: 2rem 0;
+    }
+
+    /* Code Blocks */
+    pre {
+      background-color: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      margin-bottom: 1.2rem;
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+      font-size: 0.88rem;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+      font-size: 0.88rem;
+      background-color: var(--accent-muted);
+      padding: 0.15rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+
+    /* Callouts / Blockquotes */
+    blockquote {
+      border-left: 4px solid var(--accent);
+      background-color: var(--bg-secondary);
+      padding: 0.8rem 1.2rem;
+      margin-bottom: 1.2rem;
+      border-radius: 0 6px 6px 0;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1.5rem;
+    }
+
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 0.65rem 0.85rem;
+      text-align: left;
+    }
+
+    th {
+      background-color: var(--table-header-bg);
+      color: var(--text-heading);
+      font-weight: 600;
+    }
+
+    tr:nth-child(even) {
+      background-color: var(--bg-secondary);
+    }
+
+    /* Responsive Adjustments */
+    @media (max-width: 768px) {
+      body {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        position: relative;
+        height: auto;
+      }
+      .content-wrapper {
+        margin-left: 0;
+        padding: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">CockroachDB Architecture</div>
+    <ul class="nav-list">
+      <li class="nav-item"><a href="#hlc" class="nav-link">1. Hybrid Logical Clocks</a></li>
+      <li class="nav-item"><a href="#hlc-problem" class="nav-link nav-sublink">The Core Problem</a></li>
+      <li class="nav-item"><a href="#hlc-anatomy" class="nav-link nav-sublink">HLC Anatomy</a></li>
+      <li class="nav-item"><a href="#hlc-state-machine" class="nav-link nav-sublink">Update Rules</a></li>
+      <li class="nav-item"><a href="#hlc-bound" class="nav-link nav-sublink">Clock Drift Guard</a></li>
+      <li class="nav-item"><a href="#hlc-reads" class="nav-link nav-sublink">Read Uncertainty Window</a></li>
+
+      <li class="nav-item" style="margin-top: 1rem;"><a href="#dist-txn" class="nav-link">2. Cross-Range Transactions</a></li>
+      <li class="nav-item"><a href="#txn-arch" class="nav-link nav-sublink">Architecture Overview</a></li>
+      <li class="nav-item"><a href="#txn-steps" class="nav-link nav-sublink">Execution Lifecycle</a></li>
+      <li class="nav-item"><a href="#txn-read-conflict" class="nav-link nav-sublink">Concurrent Reader Resolution</a></li>
+      <li class="nav-item"><a href="#txn-aborts" class="nav-link nav-sublink">Conflicts & Aborts</a></li>
+    </ul>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="content-wrapper">
+    <div class="header-actions">
+      <button class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Light Mode</button>
+    </div>
+
+    <h1>CockroachDB Deep Dive: Clocks & Distributed Transactions</h1>
+    <p>A comprehensive architectural reference detailing Hybrid Logical Clocks (HLC) and distributed cross-range transaction mechanics in CockroachDB.</p>
+
+    <!-- SECTION 1: HLC -->
+    <section id="hlc">
+      <h2>1. Hybrid Logical Clocks (HLC)</h2>
+      <p><strong>Hybrid Logical Clocks (HLC)</strong> solve a fundamental challenge in distributed systems: how to assign monotonically increasing timestamps that reflect real-world physical time without relying on specialized hardware like atomic clocks or GPS receivers (such as Google Spanner's TrueTime).</p>
+      <p>CockroachDB uses HLCs to enforce causality, determine transaction ordering, and achieve <strong>Serializable</strong> isolation across distributed nodes using commodity NTP clock synchronization.</p>
+
+      <h3 id="hlc-problem">The Core Problem HLC Solves</h3>
+      <p>To preserve causality, a clock implementation must strictly satisfy the <strong>Causality Requirement</strong>:</p>
+      $$\text{If Event } A \text{ happens before Event } B \quad (A \rightarrow B), \quad \text{then } L(A) < L(B)$$
+      
+      <p>Traditional clock mechanisms exhibit critical trade-offs:</p>
+      <ul>
+        <li><strong>Physical Clocks (NTP):</strong> Physical clocks inevitably drift. Node $A$ and Node $B$ can diverge by tens or hundreds of milliseconds. If Node $A$ executes a write at physical time $t=100$ and Node $B$ reads it immediately after, Node $B$'s physical clock might read $t=95$, triggering stale reads and causality violations.</li>
+        <li><strong>Lamport / Vector Clocks:</strong> Logical clocks preserve causality ($A \rightarrow B \implies L(A) < L(B)$) but bear <strong>no correlation to wall-clock time</strong>. They cannot be queried for temporal ranges like "retrieve data written in the last 5 minutes."</li>
+      </ul>
+      <p><strong>HLC bridges both paradigms:</strong> It enforces causality like a Lamport clock while remaining tightly bounded to physical wall-clock time.</p>
+
+      <h3 id="hlc-anatomy">Anatomy of an HLC Timestamp</h3>
+      <p>An HLC timestamp is structured as a two-part tuple: <strong>$(l, c)$</strong>:</p>
+      <ul>
+        <li><strong>$l$ (Physical Component):</strong> The highest physical timestamp observed by the node so far (expressed in milliseconds or nanoseconds).</li>
+        <li><strong>$c$ (Logical Component):</strong> A logical counter used to order events that occur within the same physical tick.</li>
+      </ul>
+      <p>Comparing two HLC timestamps $T_1 = (l_1, c_1)$ and $T_2 = (l_2, c_2)$ uses lexicographical evaluation:</p>
+      $$T_1 < T_2 \iff (l_1 < l_2) \quad \text{OR} \quad (l_1 = l_2 \text{ AND } c_1 < c_2)$$
+
+      <pre><code>                        HLC TIMESTAMP STRUCTURE
+┌───────────────────────────────────────┬───────────────────────────────┐
+│        Physical Component (l)         │     Logical Component (c)     │
+│   Highest Physical Time Seen So Far   │ Tie-breaker for Same Physical │
+└───────────────────────────────────────┴───────────────────────────────┘</code></pre>
+
+      <h3 id="hlc-state-machine">How HLC Updates: The State Machine</h3>
+      <p>Every node $i$ maintains its local HLC state $(l_i, c_i)$ alongside access to its local OS physical clock $pt_i$. Clocks update during <strong>Local Events</strong> and <strong>Message Receives</strong>.</p>
+
+      <h4>Case 1: Local Event or Send (e.g., Local Write)</h4>
+      <pre><code class="language-python">pt_i = current_physical_time()
+
+if pt_i > l_i:
+    l_i =
