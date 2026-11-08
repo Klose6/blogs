@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="How Cassandra 5.0 stores a write, serves a read, compacts SSTables, joins a new node, and repairs a range.">
+  <meta name="description" content="How Cassandra 5.0 stores a write, serves a read, runs an LWT, indexes with SAI, joins a node, and repairs a range.">
   <title>Cassandra Main Components</title>
   <style>
     :root {
@@ -439,9 +439,11 @@
       <li><a class="nav-link" href="#write">3. Write Path</a></li>
       <li><a class="nav-link" href="#read">4. Read Path</a></li>
       <li><a class="nav-link" href="#compaction">5. Compaction</a></li>
-      <li><a class="nav-link" href="#bootstrap">6. New Node Bootstrap</a></li>
-      <li><a class="nav-link" href="#repair">7. Incremental Repair</a></li>
-      <li><a class="nav-link" href="#details">8. Details Worth Keeping</a></li>
+      <li><a class="nav-link" href="#lwt">6. Lightweight Transactions</a></li>
+      <li><a class="nav-link" href="#sai">7. Storage-Attached Indexes</a></li>
+      <li><a class="nav-link" href="#bootstrap">8. New Node Bootstrap</a></li>
+      <li><a class="nav-link" href="#repair">9. Incremental Repair</a></li>
+      <li><a class="nav-link" href="#details">10. Details Worth Keeping</a></li>
       <li><a class="nav-link" href="#source-map">Source Map</a></li>
     </ul>
   </aside>
@@ -454,46 +456,54 @@
     <header>
       <div class="eyebrow">Distributed databases · Cassandra 5.0</div>
       <h1>Cassandra Main Components</h1>
-      <p class="lead">A Cassandra node keeps its own commit log, memtable, and SSTables. It learns who else is in the ring, and what the schema is, through gossip. Row bytes move only when a coordinator sends a mutation or a read, or when streaming copies a range for bootstrap or repair.</p>
+      <p class="lead">Think of a Cassandra cluster as many independent stores that copy the same partitions. Each node keeps its own commit log, memtable, and SSTables. Gossip tells it who else is in the ring. A coordinator asks those replicas to write, read, or agree on a compare-and-set. Streaming copies existing files when a node joins or when repair finds a gap.</p>
     </header>
 
     <section id="overview">
       <h2>1. The Mental Model</h2>
-      <p>Split the system at the replica boundary. Inside one node, a write is durable once it is in the commit log and visible once it is in the memtable. The SSTable is a later, sorted copy of that memtable. Compaction rewrites those files. Reads merge the memtable with whichever SSTables still cover the partition.</p>
-      <p>Outside the node, <code>StorageProxy</code> is the coordinator. It asks <code>TokenMetadata</code> who owns the token, then uses messaging to reach those replicas. Gossip is the channel that keeps that membership table, and the schema version, up to date. Gossip does not carry the rows.</p>
+      <p>Cassandra is a partitioned wide-column store. A partition key hashes to a token. That token decides which nodes keep a copy. Inside one node, a write is durable in the commit log and readable from the memtable. An SSTable is a later, sorted copy of that memtable. A read merges the memtable with the SSTables that still cover the partition. Compaction rewrites those files so later reads have less to merge.</p>
+      <p>The node that received the client query is the coordinator. It looks up who owns the token, then uses messaging. Gossip keeps that membership table, and the schema version, up to date. Gossip does not carry row data.</p>
 
       <div class="callout">
-        <strong>The handoff to remember:</strong> the client ack is the commit log plus the memtable, on enough replicas for the consistency level. Flush, compaction, bootstrap streaming, and repair all happen against SSTables after that ack.
+        <strong>The handoff to remember:</strong> a normal write is done for the client when enough replicas have it in the commit log and the memtable. Flush, compaction, bootstrap, and repair all work on SSTables after that ack. An LWT is different: the replicas first vote, then the same write path commits the winner.
       </div>
 
       <div class="card-grid">
         <article class="card">
           <h3>Coordinator</h3>
-          <p><code>StorageProxy</code> turns CQL into a mutation or a read, picks replicas, and waits for the consistency level. The write timestamp is the coordinator clock unless the statement sets one.</p>
+          <p>Turns CQL into a mutation or a read, picks replicas, and waits for the consistency level. The write timestamp is this node's clock unless the statement sets one.</p>
         </article>
         <article class="card">
           <h3>Ring</h3>
-          <p><code>TokenMetadata</code> is the in-memory ring. A node stores the tokens it owns. The range it serves is derived from its predecessor. <code>NetworkTopologyStrategy</code> fills each datacenter from nodes in that datacenter.</p>
+          <p>Each node stores the tokens it owns. The range it serves is everything after its predecessor, up to its token. Each datacenter fills its own copy count from nodes in that datacenter.</p>
         </article>
         <article class="card">
           <h3>Local storage</h3>
-          <p><code>CommitLog</code>, then the memtable, then SSTables published through the table <code>View</code>. The trie memtable finds a partition. The rows inside that partition live in a B-tree.</p>
+          <p>Commit log, then memtable, then SSTables. The memtable finds a partition by key. The rows inside that partition live in a B-tree.</p>
         </article>
         <article class="card">
           <h3>Cluster metadata</h3>
-          <p>Gossip carries status, tokens, and a schema version UUID. A mismatched UUID makes the node pull <code>system_schema</code> mutations from a member that already has that version.</p>
+          <p>Gossip carries status, tokens, and a schema version. A mismatched version makes the node download the actual table definitions from a peer.</p>
+        </article>
+        <article class="card">
+          <h3>Consensus</h3>
+          <p>An <code>IF</code> write is a lightweight transaction. Paxos asks a quorum of replicas to promise, propose, then commit. It only covers one partition.</p>
+        </article>
+        <article class="card">
+          <h3>Secondary indexes</h3>
+          <p>SAI is a local index on each memtable and SSTable. Vector search is SAI on a vector column. The replica still reads the matching rows from its own data.</p>
         </article>
       </div>
     </section>
 
     <section id="components">
       <h2>2. Component Map</h2>
-      <p>Every path in the rest of this article is one of these edges. Writes and reads enter through the coordinator. The replica apply path is commit log then memtable. Flush is the edge from the memtable into the SSTable set that compaction and reads share. Gossip feeds tokens and schema from the side. Bootstrap and repair reuse messaging to stream ranges that already exist on some other node.</p>
+      <p>Every later section is one of these arrows. Writes and reads enter the coordinator. The replica apply path is commit log, then memtable. Flush turns that memtable into SSTables that reads and compaction share. Gossip fills in the ring and the schema. LWT votes before it writes. SAI indexes the same files the storage engine already writes. Bootstrap and repair copy existing SSTable ranges; they do not replay rows through the coordinator.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 640" role="img" aria-labelledby="map-title map-desc">
           <title id="map-title">Cassandra component map</title>
-          <desc id="map-desc">Client requests enter StorageProxy, which consults TokenMetadata and sends work through messaging to Keyspace.apply. Apply writes the commit log and the memtable. Flush publishes an SSTable. Gossip updates TokenMetadata and Schema.</desc>
+          <desc id="map-desc">Client requests enter the coordinator, which consults the ring and sends work through messaging. Apply writes the commit log and the memtable. Flush publishes an SSTable. Gossip updates the ring and schema. LWT and SAI sit beside that storage path.</desc>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -508,43 +518,43 @@
 
           <rect class="box-accent" x="250" y="18" width="230" height="64" rx="8"></rect>
           <text class="label" x="365" y="46">Client</text>
-          <text class="small" x="365" y="64">CQL read or mutation</text>
+          <text class="small" x="365" y="64">CQL, including IF and indexes</text>
 
           <rect class="box" x="690" y="18" width="210" height="64" rx="8"></rect>
           <text class="label" x="795" y="46">Gossiper</text>
           <text class="small" x="795" y="64">status, tokens, schema UUID</text>
 
           <rect class="box-accent" x="250" y="130" width="230" height="64" rx="8"></rect>
-          <text class="label" x="365" y="158">StorageProxy</text>
-          <text class="small" x="365" y="176">consistency and replica choice</text>
+          <text class="label" x="365" y="158">Coordinator</text>
+          <text class="small" x="365" y="176">StorageProxy, Paxos, reads</text>
 
           <rect class="box" x="690" y="130" width="210" height="64" rx="8"></rect>
           <text class="label" x="795" y="158">Schema</text>
           <text class="small" x="795" y="176">keyspaces and tables</text>
 
           <rect class="box" x="30" y="250" width="220" height="64" rx="8"></rect>
-          <text class="label" x="140" y="278">TokenMetadata</text>
-          <text class="small" x="140" y="296">who owns the token</text>
+          <text class="label" x="140" y="278">Token ring</text>
+          <text class="small" x="140" y="296">who owns the partition</text>
 
           <rect class="box" x="360" y="250" width="220" height="64" rx="8"></rect>
           <text class="label" x="470" y="278">Messaging</text>
-          <text class="small" x="470" y="296">writes, reads, streams</text>
+          <text class="small" x="470" y="296">writes, reads, streams, votes</text>
 
           <rect class="box-accent" x="300" y="370" width="250" height="64" rx="8"></rect>
-          <text class="label" x="425" y="398">Keyspace.apply</text>
-          <text class="small" x="425" y="416">replica mutation path</text>
+          <text class="label" x="425" y="398">Replica apply</text>
+          <text class="small" x="425" y="416">commit log, then memtable</text>
 
           <rect class="box-log" x="40" y="510" width="210" height="64" rx="8"></rect>
-          <text class="label" x="145" y="538">CommitLog</text>
+          <text class="label" x="145" y="538">Commit log</text>
           <text class="small" x="145" y="556">durable append</text>
 
           <rect class="box-log" x="365" y="510" width="210" height="64" rx="8"></rect>
-          <text class="label" x="470" y="538">Memtable</text>
-          <text class="small" x="470" y="556">trie partition, B-tree rows</text>
+          <text class="label" x="470" y="538">Memtable + SAI</text>
+          <text class="small" x="470" y="556">rows, plus local indexes</text>
 
           <rect class="box" x="690" y="510" width="210" height="64" rx="8"></rect>
-          <text class="label" x="795" y="538">SSTable and View</text>
-          <text class="small" x="795" y="556">reads and compaction</text>
+          <text class="label" x="795" y="538">SSTables</text>
+          <text class="small" x="795" y="556">reads, compaction, SAI files</text>
 
           <path class="edge" d="M365 82 L365 130"></path>
           <path class="edge" d="M795 82 L795 130"></path>
@@ -559,57 +569,56 @@
 
           <text class="small" x="250" y="228">replica set</text>
           <text class="small" x="560" y="228">send</text>
-          <text class="small" x="620" y="300">tables exist</text>
           <text class="small" x="250" y="120">membership</text>
           <text class="small" x="630" y="530">flush</text>
         </svg>
-        <figcaption>Blue edges are coordination. Green edges are the replica storage path. The dashed edge is gossip filling the ring.</figcaption>
+        <figcaption>Blue arrows are coordination. Green arrows are the replica storage path. The dashed arrow is gossip filling the ring.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
-          <h3>Client to StorageProxy</h3>
-          <p>CQL becomes a mutation or a read command. The coordinator owns the consistency level and, for a write, the timestamp.</p>
+          <h3>Client to coordinator</h3>
+          <p>CQL becomes a mutation, a read, or an <code>IF</code> compare-and-set. The coordinator owns the consistency level and, for a normal write, the timestamp.</p>
         </li>
         <li>
-          <h3>StorageProxy to TokenMetadata</h3>
-          <p>Replica choice uses the partition token and the keyspace strategy. With <code>NetworkTopologyStrategy</code>, each datacenter fills its replication factor from nodes in that datacenter, walking one shared ring.</p>
+          <h3>Coordinator to the ring</h3>
+          <p>The partition token plus the keyspace strategy name the replicas. With Network Topology Strategy, each datacenter fills its own copy count from nodes in that datacenter. There is still one shared ring.</p>
         </li>
         <li>
-          <h3>StorageProxy to messaging</h3>
-          <p>The mutation or the read is sent to those replicas. A typical read asks one replica for the rows and the others for a digest.</p>
+          <h3>Coordinator to messaging</h3>
+          <p>A write goes to all replicas. A typical read asks one replica for the rows and the others for a digest. An LWT first sends Paxos votes, then a commit write.</p>
         </li>
         <li>
           <h3>Replica apply</h3>
-          <p><code>Keyspace.apply</code> appends the mutation to the commit log, then puts the partition update in the current memtable. That is the point at which the replica can ack.</p>
+          <p>The replica appends the mutation to the commit log, then puts it in the memtable. That is when it can ack. If SAI indexes the table, the memtable index is updated here too.</p>
         </li>
         <li>
           <h3>Memtable to SSTable</h3>
-          <p>Flush writes the frozen memtable in token order and publishes a new SSTable in the table <code>View</code>. The commitlog segment can be discarded once no memtable still depends on it.</p>
+          <p>Flush writes the memtable in token order and publishes a new SSTable. The commit-log segment can be dropped once no memtable still needs it. SAI writes its index files next to that SSTable.</p>
         </li>
         <li>
-          <h3>SSTable to reads and compaction</h3>
-          <p>A point read searches the <code>View</code> interval tree. Compaction replaces files in that same view. Both paths see one table's live SSTables, not the whole keyspace.</p>
+          <h3>SSTables to reads and compaction</h3>
+          <p>A point read asks the table's live-file set which SSTables cover this partition. Compaction replaces files in that same set. Both paths see one table, not the whole keyspace.</p>
         </li>
         <li>
           <h3>Gossip to the ring and the schema</h3>
-          <p>Endpoint state carries status, tokens, and <code>ApplicationState.SCHEMA</code>. The schema value is a UUID. The <code>CREATE TABLE</code> text arrives later, as a schema pull.</p>
+          <p>Gossip carries status, tokens, and a schema version UUID. The <code>CREATE TABLE</code> text arrives later, as a schema pull from a peer that already has that version.</p>
         </li>
         <li>
           <h3>Streaming for bootstrap and repair</h3>
-          <p>Both features copy existing SSTable ranges over messaging. They do not replay those rows through the coordinator write path.</p>
+          <p>Both copy existing SSTable ranges over messaging. They do not replay those rows as new client writes.</p>
         </li>
       </ol>
     </section>
 
     <section id="write">
       <h2>3. Write Path</h2>
-      <p>A write is finished for the client when enough replicas have the mutation in the commit log and the memtable. The SSTable does not exist yet. Flush is a local background step that runs because a memtable or the commit log crossed a threshold, or because something asked for a flush.</p>
+      <p>A normal write is finished for the client when enough replicas have the mutation in the commit log and the memtable. No SSTable has been written yet. Flush happens later, when a memtable or the commit log is full, or when someone asks for a flush.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 340" role="img" aria-labelledby="write-title write-desc">
           <title id="write-title">Cassandra write path</title>
-          <desc id="write-desc">The mutation goes from the client through StorageProxy to the replica, into the commit log, then the memtable, then an ack. Flush later writes an SSTable.</desc>
+          <desc id="write-desc">The mutation goes from the client through the coordinator to the replica, into the commit log, then the memtable, then an ack. Flush later writes an SSTable. A down replica gets a hint.</desc>
           <defs>
             <marker id="arrow-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -624,32 +633,32 @@
           <text class="small" x="155" y="64">mutation and timestamp</text>
 
           <rect class="box-accent" x="335" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="44">2 · StorageProxy.mutate</text>
-          <text class="small" x="470" y="64">replicas, then wait for CL</text>
+          <text class="label" x="470" y="44">2 · Pick replicas</text>
+          <text class="small" x="470" y="64">send to all, wait for CL</text>
 
           <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="44">3 · Replica message</text>
-          <text class="small" x="785" y="64">hint if a replica is down</text>
+          <text class="label" x="785" y="44">3 · Replica or hint</text>
+          <text class="small" x="785" y="64">hint if the replica is down</text>
 
           <rect class="box-log" x="650" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="156">4 · CommitLog.add</text>
+          <text class="label" x="785" y="156">4 · Commit log</text>
           <text class="small" x="785" y="176">durable before the memtable</text>
 
           <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="156">5 · Memtable.put</text>
-          <text class="small" x="470" y="176">partition trie, row B-tree</text>
+          <text class="label" x="470" y="156">5 · Memtable</text>
+          <text class="small" x="470" y="176">partition key, then rows</text>
 
           <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="156">6 · Ack at consistency</text>
+          <text class="label" x="155" y="156">6 · Ack</text>
           <text class="small" x="155" y="176">client request returns</text>
 
           <rect class="box" x="20" y="240" width="270" height="68" rx="8"></rect>
           <text class="label" x="155" y="268">7 · Flush</text>
-          <text class="small" x="155" y="288">switchMemtable, token order</text>
+          <text class="small" x="155" y="288">memtable copied in token order</text>
 
           <rect class="box" x="335" y="240" width="270" height="68" rx="8"></rect>
           <text class="label" x="470" y="268">8 · New SSTable</text>
-          <text class="small" x="470" y="288">View, then compaction</text>
+          <text class="small" x="470" y="288">now readable from disk</text>
 
           <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-w)"></path>
           <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-w)"></path>
@@ -659,41 +668,45 @@
           <path class="edge" d="M155 196 L155 240" marker-end="url(#arrow-w)"></path>
           <path class="edge" d="M290 274 L335 274" marker-end="url(#arrow-w)"></path>
         </svg>
-        <figcaption>The ack returns from step 6. Steps 7 and 8 run later, on the replica, when the memtable is flushed.</figcaption>
+        <figcaption>The client returns at step 6. Steps 7 and 8 run later on each replica.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
           <h3>Build the mutation</h3>
-          <p><code>QueryProcessor</code> turns the statement into a <code>Mutation</code>. The timestamp is the coordinator's clock unless the query uses <code>USING TIMESTAMP</code>. Last-write-wins is this timestamp, compared per cell.</p>
+          <p>The statement becomes a mutation. The timestamp is the coordinator clock unless the query uses <code>USING TIMESTAMP</code>. Last-write-wins compares this timestamp on each cell, not on the whole row.</p>
         </li>
         <li>
-          <h3>Choose replicas and send</h3>
-          <p><code>StorageProxy.mutate</code> resolves natural replicas for the token and sends the mutation. The coordinator returns when the consistency level is satisfied. A down replica can be covered by a hint stored on the coordinator and replayed inside the hint window.</p>
+          <h3>Send to every replica, wait for enough acks</h3>
+          <p>The coordinator finds the natural replicas for the token and sends the mutation to all of them. The client waits until the consistency level is met, for example two of three for quorum.</p>
         </li>
         <li>
-          <h3>Append the commit log</h3>
-          <p>On the replica, <code>CassandraKeyspaceWriteHandler</code> calls <code>CommitLog.instance.add</code> before the memtable accepts the update. Tables whose memtable factory skips the commit log are left out of that append.</p>
+          <h3>If a replica is down, save a hint</h3>
+          <p>The coordinator stores a hint locally and replays it when that replica comes back, as long as the hint window has not expired. Hints shrink the window of inconsistency. They are not a substitute for repair.</p>
         </li>
         <li>
-          <h3>Put the partition in the memtable</h3>
-          <p><code>ColumnFamilyStore.apply</code> calls <code>Memtable.checkSpaceAndPut</code>. In the trie memtable the path is the decorated partition key: token bytes, then key bytes. The rows for that partition sit in a B-tree, merged by clustering key. A later write to the same partition updates that B-tree. The trie does not store the row cells.</p>
+          <h3>Commit log, then memtable</h3>
+          <p>The replica writes the mutation to the commit log first. Then it puts the partition update in the current memtable. The trie path is the partition key. The rows for that partition sit in a B-tree. A later write to the same partition updates that B-tree.</p>
         </li>
         <li>
-          <h3>Ack, then flush on a later cycle</h3>
-          <p>The replica acks. The client is done. Flush calls <code>switchMemtable</code>, writes the frozen memtable as a sorted SSTable, publishes it in the <code>View</code>, and submits background compaction.</p>
+          <h3>Ack, then flush later</h3>
+          <p>The replica acks. The client is done. Flush freezes the memtable, writes it as a sorted SSTable, and asks compaction to look at the new file.</p>
         </li>
       </ol>
+
+      <div class="callout">
+        <strong>Logged batches.</strong> A batch that touches more than one partition is stored in the batch log first, then sent to the replicas. If the coordinator dies mid-batch, another node replays the log. Unlogged batches skip that extra copy and only group the network send.
+      </div>
     </section>
 
     <section id="read">
       <h2>4. Read Path</h2>
-      <p>One replica builds the merged partition. The other replicas contacted for the consistency level usually return a digest of that same result. The coordinator returns the data response when the digest matches. Tombstones are scanned on the replica even when the bytes sent back to the coordinator are small.</p>
+      <p>One replica builds the merged partition. The other replicas contacted for the consistency level usually return a digest, a checksum of the same result. The coordinator returns the rows when the digest matches. Tombstones are scanned on the replica even when the bytes sent back are small.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 360" role="img" aria-labelledby="read-title read-desc">
           <title id="read-title">Cassandra read path</title>
-          <desc id="read-desc">fetchRows sends a data request and digest requests. The data replica selects SSTables from the View, checks bloom filters and index summaries, merges cells, and the coordinator compares digests.</desc>
+          <desc id="read-desc">The coordinator sends a data request and digest requests. The data replica merges memtable and SSTables, then the coordinator compares digests.</desc>
           <defs>
             <marker id="arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -702,39 +715,35 @@
 
           <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
           <text class="label" x="155" y="44">1 · Client SELECT</text>
-          <text class="small" x="155" y="64">single-partition commands</text>
+          <text class="small" x="155" y="64">usually one partition</text>
 
           <rect class="box-accent" x="335" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="44">2 · fetchRows</text>
-          <text class="small" x="470" y="64">replicas ordered by snitch</text>
+          <text class="label" x="470" y="44">2 · Rank replicas</text>
+          <text class="small" x="470" y="64">snitch, local node first</text>
 
           <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="44">3 · Read executor</text>
-          <text class="small" x="785" y="64">speculative retry is 99p</text>
+          <text class="label" x="785" y="44">3 · Data + digests</text>
+          <text class="small" x="785" y="64">one full response</text>
 
           <rect class="box" x="650" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="156">4 · Data + digests</text>
-          <text class="small" x="785" y="176">one full response</text>
+          <text class="label" x="785" y="156">4 · Memtable + files</text>
+          <text class="small" x="785" y="176">SSTables that cover the key</text>
 
           <rect class="box" x="335" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="156">5 · Memtable + View</text>
-          <text class="small" x="470" y="176">interval tree candidates</text>
+          <text class="label" x="470" y="156">5 · Find the partition</text>
+          <text class="small" x="470" y="176">bloom filter, then index</text>
 
-          <rect class="box" x="20" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="156">6 · Bloom and summary</text>
-          <text class="small" x="155" y="176">per SSTable, then data file</text>
+          <rect class="box-log" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Merge cells</text>
+          <text class="small" x="155" y="176">newer timestamp wins</text>
 
-          <rect class="box-log" x="20" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="268">7 · Cell merge</text>
-          <text class="small" x="155" y="288">newer timestamp per cell</text>
+          <rect class="box-accent" x="20" y="240" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="268">7 · Digest check</text>
+          <text class="small" x="155" y="288">mismatch repairs copies</text>
 
           <rect class="box-accent" x="335" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="268">8 · Digest check</text>
-          <text class="small" x="470" y="288">mismatch reads full data</text>
-
-          <rect class="box-accent" x="650" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="268">9 · Result</text>
-          <text class="small" x="785" y="288">merged rows to the client</text>
+          <text class="label" x="470" y="268">8 · Result</text>
+          <text class="small" x="470" y="288">rows back to the client</text>
 
           <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-r)"></path>
           <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-r)"></path>
@@ -743,43 +752,42 @@
           <path class="edge" d="M335 162 L290 162" marker-end="url(#arrow-r)"></path>
           <path class="edge" d="M155 196 L155 240" marker-end="url(#arrow-r)"></path>
           <path class="edge" d="M290 274 L335 274" marker-end="url(#arrow-r)"></path>
-          <path class="edge" d="M605 274 L650 274" marker-end="url(#arrow-r)"></path>
         </svg>
-        <figcaption>Follow the arrows. The row wraps right to left, then left to right again.</figcaption>
+        <figcaption>Follow the arrows right, then left, then right again. Token-aware clients usually make the coordinator the data replica.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
-          <h3>Build the read and pick replicas</h3>
-          <p><code>StorageProxy.fetchRows</code> creates an <code>AbstractReadExecutor</code> per command. Replicas come from <code>TokenMetadata</code> and are ordered by the snitch. The table parameter <code>speculative_retry</code> defaults to <code>99PERCENTILE</code>, so a slow first wave can trigger one extra request.</p>
+          <h3>Pick replicas and rank them</h3>
+          <p>The coordinator lists the live replicas and sorts them with the snitch. The local node ranks first when it owns the token, which is the usual token-aware case. A slow first wave can trigger one extra request. The table default for that is the 99th percentile of recent latency.</p>
         </li>
         <li>
-          <h3>Send data to one replica and digests to the others</h3>
-          <p>The closest replica is asked for the rows. The other replicas required by the consistency level are asked for a digest. Local read size on the data replica includes tombstones. Coordinator read size counts the serialized result.</p>
+          <h3>Ask one replica for rows, the others for a digest</h3>
+          <p>The first replica in that order is asked for the actual rows. The other replicas needed for the consistency level are asked for a digest. For quorum with three copies, that is one data read and one digest. Consistency <code>ONE</code> asks only the closest replica and skips the digest.</p>
         </li>
         <li>
-          <h3>Select SSTables, then probe each file</h3>
-          <p><code>SinglePartitionReadCommand</code> reads the memtable and calls <code>View.select</code> for the partition key. The interval tree returns SSTables whose first and last keys cover that partition. Under leveled compaction that is the overlapping L0 files and at most one file per higher level. Each candidate is checked with its own bloom filter, the key cache, and its own index summary. The summary points at one interval of the primary index, and that interval points into the data file.</p>
+          <h3>Find candidate files, then the partition inside each</h3>
+          <p>The data replica reads the memtable and every SSTable whose first and last keys cover this partition. Each candidate is checked with its bloom filter, then its index. Under leveled compaction the overlapping L0 files are all checked, and at most one file per higher level.</p>
         </li>
         <li>
           <h3>Merge cells</h3>
-          <p>Iterators from the memtable and the SSTables are merged. <code>Cells.resolveRegular</code> keeps the cell with the higher timestamp. An equal timestamp keeps a tombstone over a live value. <code>LIMIT</code> counts live rows, so dead rows are still walked until the limit is filled or the partition ends. A partition tombstone newer than an SSTable's maximum timestamp can skip that file. A range tombstone is two markers around a clustering slice, and it does not skip a file that still has live rows outside the slice.</p>
+          <p>All versions of the partition are merged. The cell with the newer timestamp wins. An equal timestamp keeps a tombstone over a live value. <code>LIMIT</code> counts live rows, so deleted rows are still walked until the limit is filled. That walk is why lots of tombstones make reads slow even when the result is small.</p>
         </li>
         <li>
           <h3>Compare digests and return</h3>
-          <p>The coordinator returns the data response when the digests agree. A mismatch reads full data from the replicas and repairs the stale copies. The scan cost of tombstones stays on the replica that built the merge.</p>
+          <p>If the digests match, the coordinator returns the rows. If they do not, it fetches full data from the replicas and writes the newer cells back to the stale copies. That is read repair.</p>
         </li>
       </ol>
     </section>
 
     <section id="compaction">
       <h2>5. Compaction</h2>
-      <p>Compaction rewrites SSTables the node already owns. In Cassandra 5.0 the unified strategy groups files by density, then by how much their token ranges overlap. A bucket is work when that overlap passes a threshold derived from the scaling parameter <code>W</code>. The pending-task metric is that estimate plus compactions already running. It is refreshed when the strategy is asked for the next task.</p>
+      <p>Compaction rewrites SSTables the node already owns. Cassandra 5.0's unified strategy groups files by how dense they are, then by how much their token ranges overlap. A group is compacted when that overlap is high enough. The pending-task number is that estimate, plus work already running.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 340" role="img" aria-labelledby="cmp-title cmp-desc">
           <title id="cmp-title">Compaction path</title>
-          <desc id="cmp-desc">Background compaction asks the strategy for an overlap bucket, merges those SSTables, writes sharded output, replaces them in the View, and submits again.</desc>
+          <desc id="cmp-desc">Background compaction picks overlapping SSTables, merges them, writes new files, and replaces the old ones.</desc>
           <defs>
             <marker id="arrow-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -787,83 +795,193 @@
           </defs>
 
           <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="44">1 · submitBackground</text>
-          <text class="small" x="155" y="64">after flush or a finished task</text>
+          <text class="label" x="155" y="44">1 · New SSTable</text>
+          <text class="small" x="155" y="64">flush or a finished task</text>
 
           <rect class="box" x="335" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="44">2 · Strategy manager</text>
-          <text class="small" x="470" y="64">repair promote or demote first</text>
+          <text class="label" x="470" y="44">2 · Choose work</text>
+          <text class="small" x="470" y="64">repair files first, then overlap</text>
 
           <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="44">3 · Overlap bucket</text>
-          <text class="small" x="785" y="64">density level, then threshold</text>
+          <text class="label" x="785" y="44">3 · Merge</text>
+          <text class="small" x="785" y="64">same rules as a read</text>
 
-          <rect class="box" x="650" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="156">4 · CompactionTask</text>
-          <text class="small" x="785" y="176">same merge as a read</text>
+          <rect class="box-log" x="650" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="156">4 · Write new files</text>
+          <text class="small" x="785" y="176">split at shard boundaries</text>
 
-          <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="156">5 · Sharded writer</text>
-          <text class="small" x="470" y="176">new file at a shard boundary</text>
+          <rect class="box" x="335" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="156">5 · Swap files</text>
+          <text class="small" x="470" y="176">later reads see the output</text>
 
-          <rect class="box" x="20" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="156">6 · Replace in the View</text>
-          <text class="small" x="155" y="176">later reads see the output</text>
-
-          <rect class="box-accent" x="20" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="268">7 · Submit again</text>
-          <text class="small" x="155" y="288">look for another bucket</text>
-
-          <rect class="box" x="335" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="268">Pending tasks</text>
-          <text class="small" x="470" y="288">overlap / threshold, plus active</text>
+          <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Look again</text>
+          <text class="small" x="155" y="176">another overlapping group</text>
 
           <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-c)"></path>
           <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-c)"></path>
           <path class="edge" d="M785 84 L785 128" marker-end="url(#arrow-c)"></path>
           <path class="edge" d="M650 162 L605 162" marker-end="url(#arrow-c)"></path>
           <path class="edge" d="M335 162 L290 162" marker-end="url(#arrow-c)"></path>
-          <path class="edge" d="M155 196 L155 240" marker-end="url(#arrow-c)"></path>
         </svg>
-        <figcaption>Unified compaction's pending-task number is computed from bucket overlap. It is refreshed when a task is selected.</figcaption>
+        <figcaption>Pending tasks are computed from how much files overlap, not from a real queue length.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
-          <h3>Something publishes an SSTable</h3>
-          <p>A flush, or a compaction that just finished, calls <code>CompactionManager.submitBackground</code> for that table.</p>
+          <h3>A new file appears</h3>
+          <p>A flush, or a compaction that just finished, asks the table whether more compaction is needed.</p>
         </li>
         <li>
-          <h3>Ask the strategy, repair files first</h3>
-          <p><code>CompactionStrategyManager.getNextBackgroundTask</code> considers promotion or demotion of pending-repair SSTables before an ordinary compaction.</p>
+          <h3>Pick the next group</h3>
+          <p>Files left over from repair are promoted or demoted first. Then unified compaction groups SSTables by density, which is size divided by token span. Inside a group, files that overlap too much are the next job. The scaling parameter <code>W</code> chooses a leveled-like or a tiered-like threshold.</p>
         </li>
         <li>
-          <h3>Pick a bucket</h3>
-          <p><code>UnifiedCompactionStrategy</code> sorts SSTables into levels by density, which is size divided by token span. Inside a level, files form overlap buckets. <code>W</code> below zero behaves like leveled compaction, zero is the neutral fanout, and above zero behaves like tiered compaction. The chosen bucket is the one whose overlap is past the threshold.</p>
+          <h3>Merge and replace</h3>
+          <p>The picked files are merged with the same cell and tombstone rules as a read. New SSTables are written, often split into shards. The old files drop out of the live set. If work ran, compaction looks for another group.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="lwt">
+      <h2>6. Lightweight Transactions</h2>
+      <p>A normal write does not check what is already stored. An <code>IF</code> write does. That is a lightweight transaction, LWT, also called CAS. It is Paxos for a single partition. Cassandra will not coordinate a transaction across partitions.</p>
+      <p>CQL looks like <code>UPDATE ... IF col = 1</code>, <code>INSERT ... IF NOT EXISTS</code>, or <code>DELETE ... IF EXISTS</code>. Consensus uses <code>SERIAL</code> or <code>LOCAL_SERIAL</code>. After a quorum accepts the proposal, the update is committed with a regular write consistency, usually <code>QUORUM</code> or <code>LOCAL_QUORUM</code>.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 340" role="img" aria-labelledby="lwt-title lwt-desc">
+          <title id="lwt-title">Lightweight transaction</title>
+          <desc id="lwt-desc">Prepare reads the current row and collects promises. The coordinator checks the IF condition, proposes an update, then commits it on the normal write path.</desc>
+          <defs>
+            <marker id="arrow-l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+            <marker id="arrow-l-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#1a7f37"></path>
+            </marker>
+          </defs>
+
+          <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="44">1 · IF write</text>
+          <text class="small" x="155" y="64">SERIAL, one partition</text>
+
+          <rect class="box" x="335" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="44">2 · Prepare</text>
+          <text class="small" x="470" y="64">read row, collect promises</text>
+
+          <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="44">3 · Check IF</text>
+          <text class="small" x="785" y="64">condition on current values</text>
+
+          <rect class="box-log" x="650" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="156">4 · Propose</text>
+          <text class="small" x="785" y="176">quorum accepts the ballot</text>
+
+          <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="156">5 · Commit</text>
+          <text class="small" x="470" y="176">normal mutation path</text>
+
+          <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Result</text>
+          <text class="small" x="155" y="176">applied, or current row</text>
+
+          <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-l)"></path>
+          <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-l)"></path>
+          <path class="edge" d="M785 84 L785 128" marker-end="url(#arrow-l)"></path>
+          <path class="edge-log" d="M650 162 L605 162" marker-end="url(#arrow-l-green)"></path>
+          <path class="edge-log" d="M335 162 L290 162" marker-end="url(#arrow-l-green)"></path>
+        </svg>
+        <figcaption>If a competing ballot wins, the coordinator retries. An unfinished round left by a crashed coordinator is completed before a new one starts.</figcaption>
+      </figure>
+
+      <ol class="timeline">
+        <li>
+          <h3>Prepare, and finish leftover work</h3>
+          <p>The coordinator asks a quorum to promise a ballot and to return the current partition. If some replica still has an unfinished Paxos round, that round is completed first. This is the linearizable read that <code>SERIAL</code> SELECT also uses.</p>
         </li>
         <li>
-          <h3>Merge and write shards</h3>
-          <p><code>CompactionTask</code> merges the picked files with a <code>CompactionIterator</code>, resolving cells and tombstones the same way a read does. <code>ShardedCompactionWriter</code> starts a new output SSTable when the token crosses a shard boundary.</p>
+          <h3>Evaluate the condition</h3>
+          <p>The coordinator checks the <code>IF</code> against those current values. If it matches, the proposal is the client's update. If it does not, Paxos still proposes an empty update so later readers cannot resurrect a write that this round rejected.</p>
         </li>
         <li>
-          <h3>Swap the view and look again</h3>
-          <p>The tracker drops the inputs and publishes the outputs. If a task ran, background compaction is submitted again.</p>
+          <h3>Propose, then commit on the write path</h3>
+          <p>A quorum must accept the proposal. Then the update is committed as a normal mutation: commit log, then memtable, at the commit consistency. A successful LWT returns no current row. A failed condition returns the row that blocked it. Contention from a higher ballot is retried until the CAS timeout.</p>
         </li>
       </ol>
 
-      <div class="callout">
-        <strong>Why the lag number moves:</strong> <code>estimatedRemainingTasks</code> adds each bucket's overlap divided by the threshold. <code>Compaction.PendingTasks</code> reports that sum plus compactions already running. A table that is falling behind shows a larger overlap, so the estimate climbs the next time the strategy is asked for work.
+      <div class="callout warning">
+        <strong>LWT is not a general transaction.</strong> It covers one partition. It costs several round trips. Use it for uniqueness and compare-and-set, not as the default write.
       </div>
     </section>
 
+    <section id="sai">
+      <h2>7. Storage-Attached Indexes</h2>
+      <p>SAI is the Cassandra 5.0 secondary index. It lives next to the data, not in a hidden table. Each memtable and each SSTable has its own index for the indexed column. A query still goes to replicas that own the data. Those replicas use the index to find matching primary keys, then read those rows from the memtable and SSTables as usual.</p>
+      <p>Vector search is the same mechanism on a <code>vector</code> column: approximate nearest neighbor through SAI, then the matching rows.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 340" role="img" aria-labelledby="sai-title sai-desc">
+          <title id="sai-title">SAI write and read</title>
+          <desc id="sai-desc">Writes update a memtable index and flush an SSTable index. Queries search those indexes, then read the matching rows.</desc>
+          <defs>
+            <marker id="arrow-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+          </defs>
+
+          <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="44">1 · CREATE INDEX</text>
+          <text class="small" x="155" y="64">one column, local to the replica</text>
+
+          <rect class="box" x="335" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="44">2 · Write</text>
+          <text class="small" x="470" y="64">memtable index updated too</text>
+
+          <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="44">3 · Flush</text>
+          <text class="small" x="785" y="64">SSTable plus SAI files</text>
+
+          <rect class="box" x="650" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="156">4 · Query</text>
+          <text class="small" x="785" y="176">search postings or ANN</text>
+
+          <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="156">5 · Read rows</text>
+          <text class="small" x="470" y="176">same merge as a point read</text>
+
+          <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Coordinator</text>
+          <text class="small" x="155" y="176">replicas still own the data</text>
+
+          <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-s)"></path>
+          <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-s)"></path>
+          <path class="edge" d="M785 84 L785 128" marker-end="url(#arrow-s)"></path>
+          <path class="edge" d="M650 162 L605 162" marker-end="url(#arrow-s)"></path>
+          <path class="edge" d="M335 162 L290 162" marker-end="url(#arrow-s)"></path>
+        </svg>
+        <figcaption>SAI does not store a second copy of the row. It stores terms, or vectors, mapped to row ids in that SSTable.</figcaption>
+      </figure>
+
+      <ol class="timeline">
+        <li>
+          <h3>Index the write locally</h3>
+          <p>After SAI is created, each mutation also updates a memtable index for that column. Flush writes the SSTable and, beside it, the SAI files for the indexed columns. Compaction rebuilds those files for the output SSTables.</p>
+        </li>
+        <li>
+          <h3>Query, then read the matching rows</h3>
+          <p>The coordinator still sends the query to replicas that own the data. Each replica searches its memtable index and SSTable indexes, gets primary keys, and reads those rows with the ordinary merge. Tombstones and newer timestamps are applied there, not inside the index.</p>
+        </li>
+      </ol>
+    </section>
+
     <section id="bootstrap">
-      <h2>6. New Node Bootstrap</h2>
-      <p>A new node starts from the seed list in <code>cassandra.yaml</code>. Seeds are the first gossip contact. From a seed the node learns the other members, their tokens, and each member's schema version. It pulls the schema, streams the ranges it will own, and then publishes <code>NORMAL</code>. Peers learn that the join finished on the next gossip exchange.</p>
+      <h2>8. New Node Bootstrap</h2>
+      <p>A new node starts from the seed list. Seeds are the first gossip contact. From a seed it learns the other members, their tokens, and each member's schema version. It downloads the schema, copies the ranges it will own, then tells the cluster it is <code>NORMAL</code>.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 360" role="img" aria-labelledby="boot-title boot-desc">
           <title id="boot-title">New node bootstrap</title>
-          <desc id="boot-desc">Local recovery, a shadow gossip round to the seeds, regular gossip, a schema pull, a wait until schema is ready, streaming, then STATUS NORMAL.</desc>
+          <desc id="boot-desc">Local recovery, a first contact with the seeds, regular gossip, a schema download, streaming, then STATUS NORMAL.</desc>
           <defs>
             <marker id="arrow-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -871,93 +989,66 @@
           </defs>
 
           <rect class="box" x="20" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="44">1 · Local recovery</text>
+          <text class="label" x="155" y="44">1 · Local disk</text>
           <text class="small" x="155" y="64">commit log, empty schema</text>
 
           <rect class="box-accent" x="335" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="44">2 · Shadow round</text>
-          <text class="small" x="470" y="64">empty syn to the seeds</text>
+          <text class="label" x="470" y="44">2 · Ask the seeds</text>
+          <text class="small" x="470" y="64">one shadow gossip round</text>
 
           <rect class="box-accent" x="650" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="44">3 · Gossiper.start</text>
-          <text class="small" x="785" y="64">then Schema.startSync</text>
+          <text class="label" x="785" y="44">3 · Start gossip</text>
+          <text class="small" x="785" y="64">learn the rest of the ring</text>
 
           <rect class="box" x="650" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="156">4 · Learn peers</text>
-          <text class="small" x="785" y="176">seed state includes members</text>
+          <text class="label" x="785" y="156">4 · Pull schema</text>
+          <text class="small" x="785" y="176">version UUID, then tables</text>
 
-          <rect class="box" x="335" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="156">5 · Schema pull</text>
-          <text class="small" x="470" y="176">UUID mismatch, then mutations</text>
+          <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="156">5 · Stream ranges</text>
+          <text class="small" x="470" y="176">copy SSTables it will own</text>
 
-          <rect class="box" x="20" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="156">6 · waitForSchema</text>
-          <text class="small" x="155" y="176">block until pulls finish</text>
-
-          <rect class="box-log" x="20" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="268">7 · Stream ranges</text>
-          <text class="small" x="155" y="288">RangeStreamer</text>
-
-          <rect class="box-accent" x="335" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="268">8 · Gossip NORMAL</text>
-          <text class="small" x="470" y="288">setTokens after streaming</text>
-
-          <rect class="box-accent" x="650" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="268">9 · Peers update</text>
-          <text class="small" x="785" y="288">handleStateNormal</text>
+          <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Announce NORMAL</text>
+          <text class="small" x="155" y="176">peers update the ring</text>
 
           <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-b)"></path>
           <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-b)"></path>
           <path class="edge" d="M785 84 L785 128" marker-end="url(#arrow-b)"></path>
           <path class="edge" d="M650 162 L605 162" marker-end="url(#arrow-b)"></path>
           <path class="edge" d="M335 162 L290 162" marker-end="url(#arrow-b)"></path>
-          <path class="edge" d="M155 196 L155 240" marker-end="url(#arrow-b)"></path>
-          <path class="edge" d="M290 274 L335 274" marker-end="url(#arrow-b)"></path>
-          <path class="edge" d="M605 274 L650 274" marker-end="url(#arrow-b)"></path>
         </svg>
-        <figcaption>The shadow round learns the map used for safety checks. Regular gossip is what fills the live peer set and triggers the schema pull.</figcaption>
+        <figcaption>The first seed contact is only a safety check. Regular gossip is what fills the live peer set and starts the schema pull.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
-          <h3>Recover local disk first</h3>
-          <p><code>CassandraDaemon.setup</code> loads system tables, replays the commit log, and calls <code>Schema.loadFromDisk</code>. A brand-new node has no user keyspaces, so its schema version will not match the cluster.</p>
+          <h3>Recover local disk</h3>
+          <p>The node loads system tables, replays the commit log, and reads schema from disk. A brand-new node has no user tables, so its schema version will not match the cluster.</p>
         </li>
         <li>
-          <h3>Ask the seeds, once, before joining</h3>
-          <p><code>checkForEndpointCollision</code> runs <code>Gossiper.doShadowRound</code>. An empty <code>GOSSIP_DIGEST_SYN</code> goes to every configured seed. The ack is the endpoint map that seed knows: peers, tokens, status, and schema version. That map is kept aside. It is used to reject an address collision and, by default, to reject the join while another node is bootstrapping, leaving, or moving. With <code>num_tokens: 1</code> the same check still applies. Distance between the new tokens is not consulted.</p>
+          <h3>Ask the seeds before joining</h3>
+          <p>It sends one empty gossip message to the configured seeds. The reply is the endpoint map that seed knows: peers, tokens, status, schema version. That map is used to reject an address collision and, by default, to refuse the join while another node is already joining, leaving, or moving.</p>
         </li>
         <li>
-          <h3>Start gossip, then learn the live set</h3>
-          <p><code>prepareToJoin</code> calls <code>Gossiper.start</code> and then <code>Schema.startSync</code>. With no live endpoints yet, each gossip round contacts a seed. The seed's state includes the other members. Those members become the peers this node gossips with directly.</p>
+          <h3>Gossip, then download schema</h3>
+          <p>Regular gossip starts. With no live peers yet, each round contacts a seed. The seed's state includes the other members. When a member's schema version differs, this node requests the actual table definitions and writes them into its own schema tables. Any ring member with that version can answer. Streaming waits until that pull finishes.</p>
         </li>
         <li>
-          <h3>Pull schema from a member that has the version</h3>
-          <p><code>MigrationCoordinator</code> announces the local schema UUID. <code>DefaultSchemaUpdateHandler</code> records <code>ApplicationState.SCHEMA</code> from each live ring member. A different UUID schedules <code>SCHEMA_PULL_REQ</code>. The peer answers with <code>SchemaKeyspace.convertSchemaToMutations()</code>, and the joiner applies those mutations into its own <code>system_schema</code> tables. Any member that advertises the version can answer. A seed is simply one such member when it is already in the ring.</p>
-        </li>
-        <li>
-          <h3>Stream, then publish NORMAL</h3>
-          <p><code>waitForSchema</code> blocks while the in-memory schema is empty and until the outstanding pulls finish. A non-seed with <code>auto_bootstrap</code> then allocates tokens and <code>RangeStreamer</code> copies the ranges it will own. With a single token, the node stores that token. The range it serves is <code>(predecessor, token]</code>. After streaming succeeds, <code>setTokens</code> writes <code>system.local</code>, marks the local node <code>NORMAL</code>, and gossip publishes <code>TOKENS</code> and <code>STATUS NORMAL</code>. The joining node decides success locally, from the streaming result and <code>setTokens</code>.</p>
-        </li>
-        <li>
-          <h3>Peers install the new member</h3>
-          <p>The next gossip version bump delivers <code>NORMAL</code>. <code>StorageService.onChange</code> calls <code>handleStateNormal</code>, which updates token metadata. From then on, coordinators can select the new node as a replica.</p>
+          <h3>Copy data, then go NORMAL</h3>
+          <p>A non-seed with auto-bootstrap picks tokens and streams the ranges it will own. With a single token, it stores that token. The range it serves is from its predecessor up through that token. After streaming succeeds, it marks itself <code>NORMAL</code> and gossip publishes that status. Peers update their ring on the next gossip exchange. The joining node decides success locally; there is no extra ack from the cluster.</p>
         </li>
       </ol>
-
-      <blockquote>
-        A single-token node stores its token, not a pair of range endpoints. The predecessor is computed from the current ring, so ownership changes when some other node joins or leaves in front of it.
-      </blockquote>
     </section>
 
     <section id="repair">
-      <h2>7. Incremental Repair</h2>
-      <p>Consistent incremental repair isolates the ranges under repair into their own SSTables, compares those files, streams the differences, and leaves a later compaction to mark them repaired. The repair session and the compaction strategy meet in the <code>pendingRepair</code> id on the SSTable.</p>
+      <h2>9. Incremental Repair</h2>
+      <p>Replicas can drift: hints expire, a node was down too long, or a write never reached every copy. Incremental repair compares only the unrepaired data in a range, copies the differences, and later marks those files repaired so the next repair can skip them.</p>
 
       <figure class="diagram">
         <svg viewBox="0 0 940 340" role="img" aria-labelledby="repair-title repair-desc">
           <title id="repair-title">Incremental repair</title>
-          <desc id="repair-desc">Prepare, pending anti-compaction, validation, streaming, finalize propose, finalize commit, then a later compaction promotes the pending SSTables.</desc>
+          <desc id="repair-desc">Prepare, isolate unrepaired files, compare them, stream differences, then a later compaction marks them repaired.</desc>
           <defs>
             <marker id="arrow-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
@@ -965,75 +1056,57 @@
           </defs>
 
           <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="44">1 · Repair session</text>
-          <text class="small" x="155" y="64">IncrementalRepairTask</text>
+          <text class="label" x="155" y="44">1 · Start session</text>
+          <text class="small" x="155" y="64">participants join</text>
 
           <rect class="box" x="335" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="44">2 · Prepare</text>
-          <text class="small" x="470" y="64">participants join</text>
+          <text class="label" x="470" y="44">2 · Isolate files</text>
+          <text class="small" x="470" y="64">split unrepaired SSTables</text>
 
           <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="44">3 · Anti-compaction</text>
-          <text class="small" x="785" y="64">pendingRepair = session</text>
+          <text class="label" x="785" y="44">3 · Compare</text>
+          <text class="small" x="785" y="64">only those isolated files</text>
 
-          <rect class="box" x="650" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="785" y="156">4 · Validate</text>
-          <text class="small" x="785" y="176">only that session's files</text>
+          <rect class="box-log" x="650" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="156">4 · Stream diffs</text>
+          <text class="small" x="785" y="176">matching ranges stay put</text>
 
-          <rect class="box-log" x="335" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="156">5 · Stream diffs</text>
-          <text class="small" x="470" y="176">matching ranges stay put</text>
+          <rect class="box" x="335" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="156">5 · Commit session</text>
+          <text class="small" x="470" y="176">files still pending</text>
 
-          <rect class="box" x="20" y="128" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="156">6 · Finalize propose</text>
-          <text class="small" x="155" y="176">persist, flush, then ack</text>
-
-          <rect class="box-accent" x="20" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="155" y="268">7 · Finalize commit</text>
-          <text class="small" x="155" y="288">session ends, files stay pending</text>
-
-          <rect class="box-log" x="335" y="240" width="270" height="68" rx="8"></rect>
-          <text class="label" x="470" y="268">8 · Later compaction</text>
-          <text class="small" x="470" y="288">promote, or demote on failure</text>
+          <rect class="box-accent" x="20" y="128" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="156">6 · Later compact</text>
+          <text class="small" x="155" y="176">mark repaired, or undo</text>
 
           <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-p)"></path>
           <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-p)"></path>
           <path class="edge" d="M785 84 L785 128" marker-end="url(#arrow-p)"></path>
           <path class="edge" d="M650 162 L605 162" marker-end="url(#arrow-p)"></path>
           <path class="edge" d="M335 162 L290 162" marker-end="url(#arrow-p)"></path>
-          <path class="edge" d="M155 196 L155 240" marker-end="url(#arrow-p)"></path>
-          <path class="edge" d="M290 274 L335 274" marker-end="url(#arrow-p)"></path>
         </svg>
-        <figcaption>Promotion to repaired is a compaction task after the session commits. The finalize message does not rewrite the data files.</figcaption>
+        <figcaption>The session commit does not rewrite data files. Promotion to repaired is a later compaction.</figcaption>
       </figure>
 
       <ol class="timeline">
         <li>
-          <h3>Open a session</h3>
-          <p><code>IncrementalRepairTask</code> registers a <code>CoordinatorSession</code> and runs the repair with the incremental flag set.</p>
+          <h3>Isolate the unrepaired range</h3>
+          <p>Each participant splits unrepaired SSTables that overlap the range. The in-range piece is tagged with this session. Already repaired files, and files from other sessions, stay out.</p>
         </li>
         <li>
-          <h3>Prepare, then isolate the range</h3>
-          <p>Prepare asks each participant to join. <code>PendingAntiCompaction</code> then splits unrepaired SSTables that intersect the range. The in-range piece is marked <code>pendingRepair</code> with this session id. Files that are already repaired, and files that belong to another session, stay out.</p>
+          <h3>Compare and copy differences</h3>
+          <p>Validation reads only those tagged files. Ranges that disagree are streamed. Matching ranges move no row data.</p>
         </li>
         <li>
-          <h3>Validate and stream</h3>
-          <p>Validation reads only SSTables whose <code>pendingRepair</code> id is this session. The coordinator compares results. Ranges that disagree are streamed between the participants. Ranges that match move no row data.</p>
-        </li>
-        <li>
-          <h3>Promise, commit, then compact</h3>
-          <p>Finalize propose has each node persist <code>FINALIZE_PROMISED</code> and flush the repairs table before it acks. Finalize commit ends the session. The data files are still pending. <code>incrementalSessionCompleted</code> submits background compaction, and that later task promotes them to repaired. A failed session sends <code>FailSession</code>. Demotion of those pending files also happens later, in compaction.</p>
+          <h3>Commit, then compact later</h3>
+          <p>Each node promises, flushes the repair table, then commits. The data files are still pending. A later compaction marks them repaired. A failed session demotes them the same way. Full repair skips this tagging and compares the unrepaired data in place.</p>
         </li>
       </ol>
-
-      <div class="callout warning">
-        <strong>Full repair is the other shape.</strong> It validates unrepaired data in the range and streams differences without a <code>pendingRepair</code> session, so there is no anti-compaction step and no later promotion.
-      </div>
     </section>
 
     <section id="details">
-      <h2>8. Details Worth Keeping</h2>
-      <p>These are the spots where the code is more specific than the one-line description of the feature.</p>
+      <h2>10. Details Worth Keeping</h2>
+      <p>These are the spots where the code is more specific than the one-line description.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1052,16 +1125,24 @@
               <td>Resolution is per cell, by timestamp. Two writes to different columns of the same row both survive. Counters are summed.</td>
             </tr>
             <tr>
+              <td>Hints</td>
+              <td>The coordinator stores a mutation for a down replica and replays it later. Hints expire. Repair still needed for long outages.</td>
+            </tr>
+            <tr>
               <td>Who sends rows</td>
-              <td>One replica sends the merged read response. Other full replicas usually send a digest. A digest mismatch triggers a full read and read repair.</td>
+              <td>One replica sends the merged read. Other full replicas usually send a digest. Token-aware coordinators usually send the full read to themselves.</td>
             </tr>
             <tr>
               <td>Tombstone latency</td>
-              <td><code>LIMIT</code> counts live rows. Dead cells, row deletions, and range-tombstone markers are still scanned, and <code>TombstoneScannedHistogram</code> records that count per read.</td>
+              <td><code>LIMIT</code> counts live rows. Dead cells are still scanned. That count is <code>TombstoneScannedHistogram</code>.</td>
             </tr>
             <tr>
-              <td>Point-read SSTables</td>
-              <td>The interval tree returns candidates for that partition. Each candidate has its own bloom filter and index summary. L0 files usually overlap, so a point read checks most of L0.</td>
+              <td>LWT</td>
+              <td>Paxos prepare, propose, commit on one partition. <code>SERIAL</code> for the vote, then a regular write consistency for the commit.</td>
+            </tr>
+            <tr>
+              <td>SAI</td>
+              <td>Local index files next to each SSTable. The replica uses them to find keys, then reads those rows from its own data.</td>
             </tr>
             <tr>
               <td>Compaction lag</td>
@@ -1069,19 +1150,19 @@
             </tr>
             <tr>
               <td>Schema on a new node</td>
-              <td>Gossip delivers a schema UUID. <code>SCHEMA_PULL_REQ</code> fetches the <code>system_schema</code> mutations from a member with that version.</td>
+              <td>Gossip delivers a version UUID. The node then pulls the table definitions from a member with that version.</td>
             </tr>
             <tr>
               <td>Join success</td>
-              <td>The joining node marks itself <code>NORMAL</code> after streaming and <code>setTokens</code>. Peers apply that state from gossip.</td>
+              <td>The joining node marks itself <code>NORMAL</code> after streaming. Peers apply that state from gossip.</td>
             </tr>
             <tr>
               <td>Single token</td>
-              <td>The node persists its token. The served range is <code>(predecessor, token]</code>, computed from the current ring.</td>
+              <td>The node persists its token. The served range is from the predecessor through that token, computed from the current ring.</td>
             </tr>
             <tr>
               <td>Two nodes joining</td>
-              <td>With consistent range movement left on, a node refuses to bootstrap while any peer is already joining, leaving, or moving.</td>
+              <td>By default a node refuses to bootstrap while any peer is already joining, leaving, or moving.</td>
             </tr>
           </tbody>
         </table>
@@ -1094,43 +1175,43 @@
       <ul class="source-list">
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/service/StorageProxy.java"><code>StorageProxy</code></a>
-          <div class="muted"><code>mutate</code> for writes. <code>fetchRows</code> for the data-plus-digest read.</div>
-        </li>
-        <li>
-          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/db/CassandraKeyspaceWriteHandler.java"><code>CassandraKeyspaceWriteHandler</code></a>
-          <div class="muted"><code>CommitLog.instance.add</code> before the memtable.</div>
+          <div class="muted">Coordinator for writes, digest reads, hinted handoff, and logged batches. <code>cas</code> hands LWTs to Paxos.</div>
         </li>
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/db/ColumnFamilyStore.java"><code>ColumnFamilyStore</code></a>
-          <div class="muted"><code>apply</code> into the memtable, and <code>switchMemtable</code> for flush.</div>
+          <div class="muted">Replica apply into the memtable, and flush of that memtable to an SSTable.</div>
         </li>
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/db/SinglePartitionReadCommand.java"><code>SinglePartitionReadCommand</code></a>
-          <div class="muted">Memtable plus <code>View</code> candidates, then the merged partition iterator.</div>
+          <div class="muted">Memtable plus covering SSTables, then the merged partition.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/service/reads/AbstractReadExecutor.java"><code>AbstractReadExecutor</code></a>
+          <div class="muted">First replica gets the data request. Other contacted full replicas get a digest.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/service/paxos/Paxos.java"><code>Paxos</code></a>
+          <div class="muted">LWT: prepare and read, check the condition, propose, commit.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/StorageAttachedIndex.java"><code>StorageAttachedIndex</code></a>
+          <div class="muted">Local secondary index on memtables and SSTables, including vector search.</div>
         </li>
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/db/compaction/UnifiedCompactionStrategy.java"><code>UnifiedCompactionStrategy</code></a>
-          <div class="muted">Density levels, overlap buckets, and <code>estimatedRemainingTasks</code>.</div>
+          <div class="muted">Density levels, overlap buckets, and the pending-task estimate.</div>
         </li>
         <li>
-          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/service/StorageService.java"><code>StorageService</code></a>
-          <div class="muted"><code>prepareToJoin</code>, <code>waitForSchema</code>, <code>setTokens</code>, and <code>handleStateNormal</code>.</div>
-        </li>
-        <li>
-          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/gms/Gossiper.java"><code>Gossiper</code></a>
-          <div class="muted"><code>doShadowRound</code> for the seed contact. <code>maybeGossipToSeed</code> while the live set is empty.</div>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/hints/HintsService.java"><code>HintsService</code></a>
+          <div class="muted">Writes a hint for a down replica and replays it after the node returns.</div>
         </li>
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/schema/MigrationCoordinator.java"><code>MigrationCoordinator</code></a>
-          <div class="muted">Announces the local schema UUID and pulls a version the node has not received.</div>
-        </li>
-        <li>
-          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/schema/DefaultSchemaUpdateHandler.java"><code>DefaultSchemaUpdateHandler</code></a>
-          <div class="muted">Records gossip schema versions and answers <code>SCHEMA_PULL_REQ</code> with schema mutations.</div>
+          <div class="muted">Announces the local schema UUID and pulls a version this node has not received.</div>
         </li>
         <li>
           <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/repair/IncrementalRepairTask.java"><code>IncrementalRepairTask</code></a>
-          <div class="muted">Registers the coordinator session and runs incremental repair. Anti-compaction, validation, and finalize live in the consistent-session classes next to it.</div>
+          <div class="muted">Registers the repair session. Isolation, validation, and finalize live in the consistent-session classes next to it.</div>
         </li>
       </ul>
     </section>
