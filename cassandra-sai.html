@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How Cassandra 5.0 SAI indexes a column beside each memtable and SSTable, then turns a query into primary keys and a row read.">
+  <title>Cassandra Storage-Attached Index</title>
+<style>
+    :root {
+      --bg: #ffffff;
+      --surface: #f6f8fa;
+      --surface-strong: #eaeef2;
+      --border: #d0d7de;
+      --text: #24292f;
+      --heading: #1f2328;
+      --muted: #57606a;
+      --accent: #0969da;
+      --accent-soft: rgba(9, 105, 218, 0.1);
+      --success: #1a7f37;
+      --warning: #9a6700;
+      --sidebar-width: 280px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      bottom: 0;
+      left: 0;
+      overflow-y: auto;
+      padding: 1.5rem 1rem;
+      position: fixed;
+      top: 0;
+      width: var(--sidebar-width);
+    }
+
+    .sidebar-brand {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: 1.05rem;
+      font-weight: 750;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.8rem;
+    }
+
+    .nav-list {
+      list-style: none;
+    }
+
+    .nav-link {
+      border-radius: 6px;
+      color: var(--text);
+      display: block;
+      font-size: 0.88rem;
+      padding: 0.4rem 0.6rem;
+      text-decoration: none;
+    }
+
+    .nav-link:hover {
+      background: var(--surface-strong);
+      color: var(--accent);
+    }
+
+    .content {
+      flex: 1;
+      margin-left: var(--sidebar-width);
+      max-width: 1000px;
+      min-width: 0;
+      padding: 2.5rem 3rem 4rem;
+    }
+
+    .header-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 1rem;
+    }
+
+    .home-link {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 650;
+      padding: 0.4rem 0.8rem;
+      text-decoration: none;
+    }
+
+    .home-link:hover {
+      background: var(--surface-strong);
+      color: var(--accent);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 750;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.55rem;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: clamp(1.72rem, 3vw, 2.2rem);
+      line-height: 1.2;
+      margin-bottom: 1rem;
+      padding-bottom: 0.6rem;
+    }
+
+    h2 {
+      border-bottom: 1px solid var(--border);
+      color: var(--heading);
+      font-size: 1.48rem;
+      line-height: 1.3;
+      margin: 2.7rem 0 1rem;
+      padding-bottom: 0.42rem;
+    }
+
+    h3 {
+      color: var(--heading);
+      font-size: 1.12rem;
+      line-height: 1.35;
+      margin: 1.65rem 0 0.65rem;
+    }
+
+    p {
+      margin-bottom: 1rem;
+    }
+
+    ul, ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    li {
+      margin-bottom: 0.35rem;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      background: var(--accent-soft);
+      border-radius: 4px;
+      font-size: 0.88em;
+      padding: 0.12rem 0.34rem;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.86rem;
+      line-height: 1.55;
+      margin: 1rem 0 1.25rem;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    pre code {
+      background: transparent;
+      padding: 0;
+    }
+
+    blockquote {
+      background: var(--surface);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 7px 7px 0;
+      margin: 1.1rem 0;
+      padding: 0.9rem 1.1rem;
+    }
+
+    .lead {
+      font-size: 1.07rem;
+      max-width: 830px;
+    }
+
+    .callout {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      padding: 1rem 1.1rem;
+    }
+
+    .callout.warning {
+      background: #fff8c5;
+      border-color: #d4a72c;
+    }
+
+    .card-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 1.2rem 0;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 1.2rem 0;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    .diagram svg {
+      display: block;
+      height: auto;
+      min-width: 760px;
+      width: 100%;
+    }
+
+    .diagram .box {
+      fill: #ffffff;
+      stroke: #d0d7de;
+      stroke-width: 2;
+    }
+
+    .diagram .box-accent {
+      fill: #ddf4ff;
+      stroke: #0969da;
+      stroke-width: 2;
+    }
+
+    .diagram .box-log {
+      fill: #dafbe1;
+      stroke: #1a7f37;
+      stroke-width: 2;
+    }
+
+    .diagram .label {
+      fill: #1f2328;
+      font-size: 14px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+
+    .diagram .small {
+      fill: #57606a;
+      font-size: 11px;
+      text-anchor: middle;
+    }
+
+    .diagram .edge {
+      fill: none;
+      marker-end: url(#arrow);
+      stroke: #0969da;
+      stroke-width: 2;
+    }
+
+    .diagram .edge-log {
+      fill: none;
+      marker-end: url(#arrow-green);
+      stroke: #1a7f37;
+      stroke-width: 2;
+    }
+
+    .diagram .edge-dashed {
+      fill: none;
+      marker-end: url(#arrow-muted);
+      stroke: #57606a;
+      stroke-dasharray: 6 5;
+      stroke-width: 1.5;
+    }
+
+    .timeline {
+      border-left: 2px solid var(--border);
+      list-style: none;
+      margin-left: 0.65rem;
+      padding-left: 1.55rem;
+    }
+
+    .timeline > li {
+      margin-bottom: 1.4rem;
+      position: relative;
+    }
+
+    .timeline > li::before {
+      background: var(--accent);
+      border: 3px solid var(--bg);
+      border-radius: 50%;
+      content: "";
+      height: 13px;
+      left: -2.02rem;
+      position: absolute;
+      top: 0.3rem;
+      width: 13px;
+    }
+
+    .timeline h3 {
+      margin: 0 0 0.45rem;
+    }
+
+    .table-wrap {
+      margin-bottom: 1.4rem;
+      overflow-x: auto;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.68rem 0.82rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface);
+      color: var(--heading);
+      font-weight: 700;
+    }
+
+    tr:nth-child(even) {
+      background: #fbfcfd;
+    }
+
+    .source-list {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .source-list li {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      margin-bottom: 0.65rem;
+      padding: 0.78rem 0.9rem;
+    }
+
+    .source-list code {
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    figcaption {
+      color: var(--muted);
+      font-size: 0.86rem;
+      margin-top: 0.7rem;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 2.4rem 0 1.2rem;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        border-bottom: 1px solid var(--border);
+        border-right: 0;
+        padding: 1rem 1.5rem;
+        position: relative;
+        width: 100%;
+      }
+
+      .sidebar-brand {
+        border: 0;
+        margin: 0;
+        padding: 0;
+      }
+
+      .nav-list {
+        display: none;
+      }
+
+      .content {
+        margin-left: 0;
+        max-width: none;
+        padding: 1.5rem;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-brand">Storage-Attached Index</div>
+    <ul class="nav-list">
+      <li><a class="nav-link" href="#idea">1. The Idea</a></li>
+      <li><a class="nav-link" href="#example">2. The Example</a></li>
+      <li><a class="nav-link" href="#pieces">3. The Pieces</a></li>
+      <li><a class="nav-link" href="#write">4. Write and Flush</a></li>
+      <li><a class="nav-link" href="#read">5. A Query</a></li>
+      <li><a class="nav-link" href="#delete">6. Deletes</a></li>
+      <li><a class="nav-link" href="#vector">7. Vector Search</a></li>
+      <li><a class="nav-link" href="#source-map">Source Map</a></li>
+    </ul>
+  </aside>
+
+  <main class="content">
+    <div class="header-actions">
+      <a class="home-link" href="index.html">All articles</a>
+    </div>
+
+    <header>
+      <div class="eyebrow">Distributed databases · Cassandra 5.0</div>
+      <h1>Cassandra Storage-Attached Index</h1>
+      <p class="lead">SAI is a secondary index that lives next to the data on each replica. A write updates a small in-memory index. Flush writes that index beside the new SSTable. A query searches those indexes for primary keys, then reads the matching rows the same way a normal read does.</p>
+    </header>
+
+    <section id="idea">
+      <h2>1. The Idea</h2>
+      <p>The partition key is how Cassandra finds a row. A query on some other column, such as a name or an age, would otherwise scan every partition the replica owns. SAI stores, for that column, a map from the column value to the primary keys that contain it.</p>
+      <p>The index is local. It is not a hidden table that other nodes write into. Each replica indexes only the rows it stores. The coordinator still sends the query to the replicas that own the token ranges, at the consistency level you asked for. Those replicas use SAI, then return rows.</p>
+
+      <div class="callout">
+        <strong>What SAI stores:</strong> a term, or a number, or a vector, pointing at row ids. The row itself stays in the memtable and the SSTable. After the index names a primary key, Cassandra reads that key and applies timestamps and tombstones as usual.
+      </div>
+    </section>
+
+    <section id="example">
+      <h2>2. The Example</h2>
+      <p>The rest of this page uses one table and two indexes. <code>id</code> is the partition key, so it does not need an index. <code>name</code> and <code>age</code> do.</p>
+      <pre><code>CREATE TABLE person (
+    id int,
+    name text,
+    age int,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX ON person (name) USING 'sai'
+    WITH OPTIONS = {'case_sensitive': false};
+
+CREATE INDEX ON person (age) USING 'sai';
+
+INSERT INTO person (id, name, age) VALUES (1, 'John', 21);
+INSERT INTO person (id, name, age) VALUES (2, 'john', 50);
+INSERT INTO person (id, name, age) VALUES (4, 'Caleb', 34);</code></pre>
+      <p>Two queries show the two index shapes. The name query is an equality lookup. The age query is a range. A query that uses both is the intersection of those two answers.</p>
+      <pre><code>SELECT * FROM person WHERE name = 'John';
+SELECT * FROM person WHERE age &gt;= 18 AND age &lt;= 35;
+SELECT * FROM person WHERE name = 'John' AND age &lt;= 35;</code></pre>
+      <p>Because the name index was created with <code>case_sensitive: false</code>, both <code>John</code> and <code>john</code> match the first query. The age query returns id 1 and id 4. The combined query returns only id 1.</p>
+    </section>
+
+    <section id="pieces">
+      <h2>3. The Pieces</h2>
+      <p>One table can have many SAI indexes. They share one group so the expensive part, turning a row id back into a primary key, is stored once per SSTable.</p>
+
+      <div class="card-grid">
+        <article class="card">
+          <h3>One index per column</h3>
+          <p><code>StorageAttachedIndex</code> is the index on <code>name</code> or on <code>age</code>. It knows the column type, the analyzer, and how to search its own memtable and SSTable indexes.</p>
+        </article>
+        <article class="card">
+          <h3>One group per table</h3>
+          <p><code>StorageAttachedIndexGroup</code> holds every SAI index on <code>person</code>. On a write it updates all of them. On a flush it writes the shared SSTable files plus one index per column.</p>
+        </article>
+        <article class="card">
+          <h3>Memtable index</h3>
+          <p>While the row is still in memory, a trie maps the term to primary keys. Numbers use the same in-memory structure. Vectors use a separate in-memory graph.</p>
+        </article>
+        <article class="card">
+          <h3>SSTable index</h3>
+          <p>After flush, text terms sit in a byte-ordered trie. Numbers sit in a balanced tree. Both point at posting lists of row ids. Vectors sit in an on-disk nearest-neighbor graph.</p>
+        </article>
+      </div>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 420" role="img" aria-labelledby="pieces-title pieces-desc">
+          <title id="pieces-title">SAI pieces on one replica</title>
+          <desc id="pieces-desc">The table group owns a memtable index and an SSTable index per column. Per-SSTable files map row ids back to primary keys and are shared by every column.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+            <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#1a7f37"></path>
+            </marker>
+          </defs>
+
+          <rect class="box-accent" x="330" y="16" width="280" height="64" rx="8"></rect>
+          <text class="label" x="470" y="44">person table</text>
+          <text class="small" x="470" y="62">StorageAttachedIndexGroup</text>
+
+          <rect class="box" x="40" y="130" width="250" height="68" rx="8"></rect>
+          <text class="label" x="165" y="158">name index</text>
+          <text class="small" x="165" y="178">text trie to row ids</text>
+
+          <rect class="box" x="345" y="130" width="250" height="68" rx="8"></rect>
+          <text class="label" x="470" y="158">age index</text>
+          <text class="small" x="470" y="178">number tree to row ids</text>
+
+          <rect class="box" x="650" y="130" width="250" height="68" rx="8"></rect>
+          <text class="label" x="775" y="158">Memtable indexes</text>
+          <text class="small" x="775" y="178">same terms, still in memory</text>
+
+          <rect class="box-log" x="180" y="270" width="580" height="72" rx="8"></rect>
+          <text class="label" x="470" y="300">Shared per SSTable</text>
+          <text class="small" x="470" y="320">row id to token, partition key, and clustering key</text>
+
+          <path class="edge" d="M400 80 L165 130"></path>
+          <path class="edge" d="M470 80 L470 130"></path>
+          <path class="edge" d="M540 80 L775 130"></path>
+          <path class="edge-log" d="M165 198 L300 270" marker-end="url(#arrow-green)"></path>
+          <path class="edge-log" d="M470 198 L470 270" marker-end="url(#arrow-green)"></path>
+          <path class="edge-log" d="M775 198 L640 270" marker-end="url(#arrow-green)"></path>
+        </svg>
+        <figcaption>Column indexes answer "which row ids have this value?" The shared files answer "which primary key is row id 7?"</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>On disk</th>
+              <th>Shared or per column</th>
+              <th>What it holds</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Terms trie</td>
+              <td>Per text column</td>
+              <td><code>John</code> points at the posting list for that term.</td>
+            </tr>
+            <tr>
+              <td>Balanced tree</td>
+              <td>Per numeric column</td>
+              <td>A range such as ages 18 through 35 walks the tree and collects posting lists.</td>
+            </tr>
+            <tr>
+              <td>Posting lists</td>
+              <td>Per column</td>
+              <td>The row ids inside this SSTable that contain the term.</td>
+            </tr>
+            <tr>
+              <td>Row-to-key map</td>
+              <td>Once per SSTable</td>
+              <td>Row id to token, partition key, and clustering key. Every column index on the table uses it.</td>
+            </tr>
+            <tr>
+              <td>Completion marker</td>
+              <td>Per column and per SSTable</td>
+              <td>Written only after the index files finished. A missing marker means the index must be rebuilt.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="write">
+      <h2>4. Write and Flush</h2>
+      <p>The row is written first, through the normal commit log and memtable. SAI is told about the row in the same mutation. It does not do a read-before-write, and it does not index a row that has no live cells.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 250" role="img" aria-labelledby="write-title write-desc">
+          <title id="write-title">SAI write and flush</title>
+          <desc id="write-desc">An insert updates the memtable and the in-memory SAI index. Flush assigns row ids, writes the SSTable, then writes the shared key map and each column index.</desc>
+          <defs>
+            <marker id="arrow-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+          </defs>
+          <rect class="box-accent" x="16" y="80" width="200" height="68" rx="8"></rect>
+          <text class="label" x="116" y="108">1 · INSERT</text>
+          <text class="small" x="116" y="128">commit log, memtable</text>
+          <rect class="box" x="252" y="80" width="200" height="68" rx="8"></rect>
+          <text class="label" x="352" y="108">2 · Index row</text>
+          <text class="small" x="352" y="128">term to primary key</text>
+          <rect class="box" x="488" y="80" width="200" height="68" rx="8"></rect>
+          <text class="label" x="588" y="108">3 · Flush</text>
+          <text class="small" x="588" y="128">assign row ids</text>
+          <rect class="box-log" x="724" y="80" width="200" height="68" rx="8"></rect>
+          <text class="label" x="824" y="108">4 · Index files</text>
+          <text class="small" x="824" y="128">trie or tree plus keys</text>
+          <path class="edge" d="M216 114 L252 114" marker-end="url(#arrow-w)"></path>
+          <path class="edge" d="M452 114 L488 114" marker-end="url(#arrow-w)"></path>
+          <path class="edge" d="M688 114 L724 114" marker-end="url(#arrow-w)"></path>
+        </svg>
+        <figcaption>The client ack does not wait for the on-disk index. That index is written when the memtable flushes.</figcaption>
+      </figure>
+
+      <ol class="timeline">
+        <li>
+          <h3>The insert hits the memtable</h3>
+          <p><code>INSERT (1, 'John', 21)</code> is an ordinary mutation. After the partition update is applied, the index group sees a live row and calls each column indexer.</p>
+        </li>
+        <li>
+          <h3>Each column records the term</h3>
+          <p>The name index stores <code>John</code> pointing at primary key <code>1</code>. With case-insensitive analysis, the stored term is the normalized form, so a later search for <code>john</code> finds it. The age index stores <code>21</code> pointing at the same primary key. The second insert, id 2, adds <code>john</code> and <code>50</code>. The third adds <code>Caleb</code> and <code>34</code>.</p>
+        </li>
+        <li>
+          <h3>Flush assigns a row id</h3>
+          <p>Rows are written to the new SSTable in token order. Each live row gets the next row id, starting at 0. Suppose this flush writes id 1, then id 4, then id 2. They might become row ids 0, 1, and 2. The order is token order, not the order of the inserts. Range tombstones and rows with no live data are skipped, so they get no row id.</p>
+        </li>
+        <li>
+          <h3>Shared files, then each column</h3>
+          <p>One set of files records row id 0 as partition key 1, row id 1 as partition key 4, and row id 2 as partition key 2. The name index then writes its trie: the normalized term for John points at row ids 0 and 2, and Caleb points at row id 1. The age index writes its tree: 21 points at row id 0, 34 at row id 1, 50 at row id 2. A completion marker is written only after those files succeed.</p>
+        </li>
+      </ol>
+
+      <blockquote>
+        Compaction does the same job again. It merges SSTables, so it builds a new shared key map and new column indexes for the output files. The old index files go away with the old SSTables.
+      </blockquote>
+    </section>
+
+    <section id="read">
+      <h2>5. A Query</h2>
+      <p>Take <code>SELECT * FROM person WHERE name = 'John' AND age &lt;= 35</code>. This is not a partition-key lookup. The coordinator treats it as a range read over the token ring and asks the replicas that cover those ranges. Each replica runs SAI locally, then returns the rows that still match.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 940 340" role="img" aria-labelledby="read-title read-desc">
+          <title id="read-title">SAI query on one replica</title>
+          <desc id="read-desc">Search the name index and the age index, intersect the primary keys, read those rows, then drop any row the current data no longer matches.</desc>
+          <defs>
+            <marker id="arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#0969da"></path>
+            </marker>
+          </defs>
+          <rect class="box-accent" x="20" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="44">1 · Name index</text>
+          <text class="small" x="155" y="64">keys for John</text>
+          <rect class="box-accent" x="335" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="44">2 · Age index</text>
+          <text class="small" x="470" y="64">keys for 18 to 35</text>
+          <rect class="box" x="650" y="16" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="44">3 · Intersect</text>
+          <text class="small" x="785" y="64">keys in both answers</text>
+          <rect class="box-log" x="650" y="150" width="270" height="68" rx="8"></rect>
+          <text class="label" x="785" y="178">4 · Read rows</text>
+          <text class="small" x="785" y="198">memtable and SSTables</text>
+          <rect class="box" x="335" y="150" width="270" height="68" rx="8"></rect>
+          <text class="label" x="470" y="178">5 · Post-filter</text>
+          <text class="small" x="470" y="198">drop stale or deleted</text>
+          <rect class="box-accent" x="20" y="150" width="270" height="68" rx="8"></rect>
+          <text class="label" x="155" y="178">6 · Return</text>
+          <text class="small" x="155" y="198">rows to the coordinator</text>
+          <path class="edge" d="M290 50 L335 50" marker-end="url(#arrow-r)"></path>
+          <path class="edge" d="M605 50 L650 50" marker-end="url(#arrow-r)"></path>
+          <path class="edge" d="M785 84 L785 150" marker-end="url(#arrow-r)"></path>
+          <path class="edge" d="M650 184 L605 184" marker-end="url(#arrow-r)"></path>
+          <path class="edge" d="M335 184 L290 184" marker-end="url(#arrow-r)"></path>
+        </svg>
+        <figcaption>AND is an intersection of primary-key lists. A single predicate skips the intersection and uses that one list.</figcaption>
+      </figure>
+
+      <ol class="timeline">
+        <li>
+          <h3>Search every copy of each index</h3>
+          <p>The name predicate searches the memtable trie and every SSTable trie for the normalized term <code>john</code>. Each hit is a row id. The shared key map turns that row id into primary key 1 and primary key 2. The age predicate searches the numeric tree for 18 through 35 and gets primary keys 1 and 4. Memtable hits are already primary keys, so they skip the row-id map.</p>
+        </li>
+        <li>
+          <h3>Keep keys that satisfy every predicate</h3>
+          <p>The two lists are walked together in primary-key order. Only key 1 is in both. That is the intersection. An <code>OR</code> would keep the union instead. If the query is not allowed to filter strictly, unrepaired SSTables are handled so a partial update on one column is not dropped before the row is read.</p>
+        </li>
+        <li>
+          <h3>Read the row, then check it again</h3>
+          <p>Key 1 is read from the memtable and the SSTables with the normal partition read. The index can be ahead of a delete, or a newer write can have changed the cell. Post-filtering drops the row if the current cells no longer match <code>name = 'John'</code> and <code>age &lt;= 35</code>. The coordinator then merges replica answers the same way it merges any other read.</p>
+        </li>
+      </ol>
+
+      <div class="callout">
+        <strong>Why the second check exists:</strong> SAI indexes the value at write time and does not remove entries on delete. The row read is what sees the tombstone or the newer value. The index is a candidate list, not the final answer.
+      </div>
+    </section>
+
+    <section id="delete">
+      <h2>6. Deletes</h2>
+      <p>Delete id 1. The mutation writes a tombstone into the memtable. The index group sees a row with no live data and does not update the name or age index. The on-disk posting list still says row id 0 once that row has been flushed.</p>
+      <p>The next query for <code>name = 'John'</code> still finds key 1 in the index. The row read then sees the tombstone and drops the row, so the client does not get id 1. Compaction later rewrites the SSTable without that live row, and the new index files no longer contain it.</p>
+      <p>That is why a delete does not have to find and edit every posting list. It also means an index with many deleted keys still points at rows the query will throw away. The cost shows up as extra partition reads, the same way tombstones cost a normal read.</p>
+    </section>
+
+    <section id="vector">
+      <h2>7. Vector Search</h2>
+      <p>A <code>vector&lt;float, n&gt;</code> column uses the same group, the same row ids, and the same final row read. The index structure is different. Instead of a trie or a number tree, the memtable keeps an in-memory graph and the SSTable keeps an on-disk approximate nearest-neighbor graph. A query uses <code>ORDER BY embedding ANN OF [..] LIMIT k</code>.</p>
+      <p>The replica asks each memtable and SSTable graph for neighbors, merges them by score, and keeps the best matches. It then reads those primary keys and returns them in primary-key order after the top-k selection, because Cassandra streams partitions in token order. In this tree the vector index is marked experimental: the code rejects consistency above <code>ONE</code> or <code>LOCAL_ONE</code>, paging, queries without <code>LIMIT</code>, and several other clauses.</p>
+    </section>
+
+    <section id="source-map">
+      <h2>Source Map</h2>
+      <p>Names below are from Cassandra 5.0.</p>
+      <ul class="source-list">
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/StorageAttachedIndexGroup.java"><code>StorageAttachedIndexGroup</code></a>
+          <div class="muted">Updates every column index on a live row, and creates the flush writer for the SSTable.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/StorageAttachedIndex.java"><code>StorageAttachedIndex</code></a>
+          <div class="muted">One column: type, analyzer, memtable index, and the SSTable indexes for that column.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/memory/TrieMemoryIndex.java"><code>TrieMemoryIndex</code></a>
+          <div class="muted">In-memory term to primary keys, used until the memtable flushes.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/disk/StorageAttachedIndexWriter.java"><code>StorageAttachedIndexWriter</code></a>
+          <div class="muted">Assigns row ids during flush and writes the per-SSTable key map plus each column index.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/disk/format/IndexComponent.java"><code>IndexComponent</code></a>
+          <div class="muted">The on-disk pieces: terms trie, balanced tree, posting lists, and the shared row-id map.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/plan/QueryController.java"><code>QueryController</code></a>
+          <div class="muted">Intersects or unions the key lists, then reads each surviving primary key.</div>
+        </li>
+        <li>
+          <a href="https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/index/sai/plan/StorageAttachedIndexSearcher.java"><code>StorageAttachedIndexSearcher</code></a>
+          <div class="muted">Runs the local search. Vector queries take a top-k path before the row read.</div>
+        </li>
+      </ul>
+      <p>The shorter placement of SAI inside the rest of the node is in <a href="cassandra-main-components.html#sai">Cassandra Main Components</a>.</p>
+    </section>
+  </main>
+</body>
+</html>

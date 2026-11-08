@@ -916,7 +916,7 @@
 
     <section id="sai">
       <h2>7. Storage-Attached Indexes</h2>
-      <p>SAI is the Cassandra 5.0 secondary index. It lives next to the data, not in a hidden table. Each memtable and each SSTable has its own index for the indexed column. A query still goes to replicas that own the data. Those replicas use the index to find matching primary keys, then read those rows from the memtable and SSTables as usual.</p>
+      <p>SAI is the Cassandra 5.0 secondary index. It lives next to the data, not in a hidden table. Each memtable and each SSTable has its own index for the indexed column. A query still goes to replicas that own the data. Those replicas use the index to find matching primary keys, then read those rows from the memtable and SSTables as usual. The component-by-component walkthrough is in <a href="cassandra-sai.html">Cassandra Storage-Attached Index</a>.</p>
       <p>Vector search is the same mechanism on a <code>vector</code> column: approximate nearest neighbor through SAI, then the matching rows.</p>
 
       <figure class="diagram">
